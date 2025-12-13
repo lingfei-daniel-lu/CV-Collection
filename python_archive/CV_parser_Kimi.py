@@ -15,8 +15,8 @@ from tqdm import tqdm
 
 # ───────────────────────── USER SETTINGS ─────────────────────────────── #
 
-ROOT_FOLDER = Path("/Users/zhaohuiwang/Downloads/cv_251_docx")
-OUT_CSV     = Path("/Users/zhaohuiwang/Downloads/associateprofessor_1_250_result5.csv")
+ROOT_FOLDER = Path("/Users/lingfeilu/Documents/CV-Collection")
+OUT_CSV     = Path("/Users/lingfeilu/Documents/CV-Collection/test.csv")
 
 # Use the requested model:
 MODEL_NAME  = "kimi-k2-0905-preview"
