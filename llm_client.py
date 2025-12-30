@@ -50,7 +50,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         key="kimi",
         model="kimi-k2-0905-preview",
         api_key_env="sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2",
-        base_url="https://api.moonshot.cn/v1",
+        base_url="https://api.moonshot.ai/v1",
     ),
 }
 

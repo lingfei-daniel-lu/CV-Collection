@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os, sys
 from pathlib import Path
+from datetime import date
 
 import pandas as pd
 from tqdm import tqdm
@@ -18,10 +19,12 @@ from prompt_templates import JOURNALS, get_prompt
 
 BASE_DIR    = Path(__file__).resolve().parent
 ROOT_FOLDER = BASE_DIR / "CV_word"
+OUTPUT_FOLDER = BASE_DIR / "output"
+EXPORT_DATE = date.today().isoformat()
 
 # Comma-separated env var (CV_MODELS) controls which providers run; defaults to deepseek + kimi.
 MODEL_KEYS = tuple(
-    m for m in os.getenv("CV_MODELS", "deepseek").split(",") if m
+    m for m in os.getenv("CV_MODELS", "deepseek,kimi").split(",") if m
 )
 
 # LLM prompt kept separate for easy edits.
@@ -31,7 +34,7 @@ PROMPT = get_prompt()
 
 def process_model(model_key: str, docx_paths: list[Path]) -> None:
     client = get_model_client(model_key)
-    out_csv = BASE_DIR / f"output_{model_key}.csv"
+    out_csv = OUTPUT_FOLDER / f"output_{model_key}_{EXPORT_DATE}.csv"
 
     rows: list[dict] = []
     processed_files: set[str] = set()
@@ -80,6 +83,7 @@ def process_model(model_key: str, docx_paths: list[Path]) -> None:
 
 
 def main() -> None:
+    OUTPUT_FOLDER.mkdir(exist_ok=True)
     docx_paths = sorted(ROOT_FOLDER.rglob("*.docx"))
 ##    docx_paths = docx_paths[135:]
     if not docx_paths:

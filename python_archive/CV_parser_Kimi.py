@@ -15,8 +15,8 @@ from tqdm import tqdm
 
 # ───────────────────────── USER SETTINGS ─────────────────────────────── #
 
-ROOT_FOLDER = Path("/Users/lingfeilu/Documents/CV-Collection")
-OUT_CSV     = Path("/Users/lingfeilu/Documents/CV-Collection/test.csv")
+ROOT_FOLDER = Path("/Users/zhaohuiwang/Downloads/cv_251_docx")
+OUT_CSV     = Path("/Users/zhaohuiwang/Downloads/associateprofessor_1_250_result5.csv")
 
 # Use the requested model:
 MODEL_NAME  = "kimi-k2-0905-preview"
@@ -54,9 +54,11 @@ JOURNALS = [
 # ───────────────────────────  API KEY  ───────────────────────────────── #
 
 # Kimi’s OpenAI-compatible API endpoint:
+KIMI_API_KEY = "sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2"
+
 client = OpenAI(
-    api_key=os.getenv("KIMI_API_KEY"),
-    base_url="https://api.moonshot.cn/v1"
+    api_key=KIMI_API_KEY,
+    base_url="https://api.moonshot.ai/v1"
 )
 
 # ───────────────────────── PROMPT TEMPLATE ───────────────────────────── #
