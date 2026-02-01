@@ -11,8 +11,8 @@ from datetime import date
 import pandas as pd
 from tqdm import tqdm
 
-from cv_parser_common import docx_to_text, flush_rows_to_csv, safe_json_load
-from llm_client import MODEL_CONFIGS, get_model_client
+from common_functions import docx_to_text, flush_rows_to_csv, safe_json_load
+from llm_client import get_model_client
 from prompt_templates import JOURNALS, get_prompt
 
 # ───────────────────────── USER SETTINGS ─────────────────────────────── #

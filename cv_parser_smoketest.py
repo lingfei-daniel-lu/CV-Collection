@@ -7,7 +7,7 @@ from __future__ import annotations
 import json, os, sys
 from pathlib import Path
 
-from cv_parser_common import docx_to_text, safe_json_load
+from common_functions import docx_to_text, safe_json_load
 from llm_client import MODEL_CONFIGS, get_model_client
 from prompt_templates import get_prompt
 
