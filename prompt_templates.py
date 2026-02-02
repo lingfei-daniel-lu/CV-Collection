@@ -30,8 +30,6 @@ JOURNALS = [
     "JOURNAL OF DEVELOPMENT ECONOMICS",
 ]
 
-journal_schema_lines = ",\n      ".join(f'"{j}": <int | false>' for j in JOURNALS)
-
 PROMPT_TEMPLATE = f"""
 ONLY RETURN JSON. NO MARKDOWN. NO COMMENTARY.
 

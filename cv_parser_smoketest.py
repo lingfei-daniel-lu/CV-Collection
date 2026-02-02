@@ -5,28 +5,20 @@ Quick smoke test to verify model calls on a small CV sample.
 from __future__ import annotations
 
 import json, os, sys
-from pathlib import Path
 
 from common_functions import docx_to_text, safe_json_load
-from llm_client import MODEL_CONFIGS, get_model_client
-from prompt_templates import get_prompt
+from cv_parser_main import MODEL_KEYS as DEFAULT_MODEL_KEYS, PROMPT, ROOT_FOLDER
+from llm_client import get_model_client
 
 
-BASE_DIR = Path(__file__).resolve().parent
-ROOT_FOLDER = BASE_DIR / "CV_word"
-
-# Comma-separated env var (CV_MODELS) controls which providers run; defaults to deepseek + kimi.
-MODEL_KEYS = tuple(
-    m for m in os.getenv("CV_MODELS", "deepseek,kimi").split(",") if m
-)
+# Model selection for smoke test (include Poe by default).
+MODEL_KEYS = tuple(dict.fromkeys(DEFAULT_MODEL_KEYS + ("poe",)))
 
 # Limit how many CVs are sent to each model (default: 2).
 SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "2"))
 
-PROMPT = get_prompt()
 
-
-def smoke_model(model_key: str, docx_paths: list[Path]) -> None:
+def smoke_model(model_key: str, docx_paths) -> None:
     client = get_model_client(model_key)
 
     for path in docx_paths:

@@ -42,6 +42,8 @@ def safe_json_load(raw: str, *, label: str):
 
 
 def flush_rows_to_csv(rows: list[dict], out_csv: Path, journals: Iterable[str]):
+    if not rows:
+        return
     df = pd.DataFrame(rows)
     first_cols = [
         "file",
@@ -53,4 +55,5 @@ def flush_rows_to_csv(rows: list[dict], out_csv: Path, journals: Iterable[str]):
     journal_cols = list(journals)
     if not df.empty:
         df = df[first_cols + journal_cols]
-    df.to_csv(out_csv, index=False)
+    write_header = not out_csv.exists()
+    df.to_csv(out_csv, index=False, mode="a", header=write_header)

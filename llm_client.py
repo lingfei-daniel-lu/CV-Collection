@@ -17,14 +17,15 @@ MAX_RETRIES = 5
 class ModelConfig:
     key: str
     model: str
-    api_key_env: str  # Env var name OR literal key (supports repo-stored keys for quick smoke tests)
+    api_key_env: str  # Env var name OR literal key
     base_url: str | None = None
     temperature: float = 0.4
+    model_env: str | None = None  # Optional env var to override the model name
 
     def build_client(self) -> OpenAI:
         api_key = os.getenv(self.api_key_env)
-        # For convenience, allow config value itself to be a literal key (e.g., starts with "sk-" or "proj_")
-        if not api_key and self.api_key_env.startswith(("sk-", "proj_", "pat_")):
+        # If env var is not set, fall back to the configured value as a literal key.
+        if not api_key:
             api_key = self.api_key_env
         if not api_key:
             raise RuntimeError(f"Set env var {self.api_key_env} for {self.key}")
@@ -32,6 +33,13 @@ class ModelConfig:
         if self.base_url:
             kwargs["base_url"] = self.base_url
         return OpenAI(**kwargs)
+
+    def resolved_model(self) -> str:
+        if self.model_env:
+            model = os.getenv(self.model_env, "").strip()
+            if model:
+                return model
+        return self.model
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
@@ -41,16 +49,19 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         api_key_env="sk-6f7094ece175423c992b4e231dcfbe49",
         base_url="https://api.deepseek.com",
     ),
-    "chatgpt": ModelConfig(
-        key="chatgpt",
-        model="gpt-5",
-        api_key_env="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",
-    ),
     "kimi": ModelConfig(
         key="kimi",
         model="kimi-k2-0905-preview",
         api_key_env="sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2",
         base_url="https://api.moonshot.ai/v1",
+    ),
+    # Poe provides an OpenAI-compatible API endpoint
+    "poe": ModelConfig(
+        key="poe",
+        model="gpt-5.2",
+        model_env="POE_MODEL",
+        api_key_env="IuB8CmzLrdDGrXpxIAxQSnOdwvX3MqrsjbIBKiChSuU",
+        base_url="https://api.poe.com/v1",
     ),
 }
 
@@ -65,7 +76,7 @@ class ModelClient:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = self.client.chat.completions.create(
-                    model=self.config.model,
+                    model=self.config.resolved_model(),
                     temperature=self.config.temperature,
                     messages=[
                         {"role": "user", "content": prompt},
