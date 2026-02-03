@@ -77,6 +77,8 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
                     "promotion_year": data.get("promotion_year"),
                     "promotion_university": data.get("promotion_university"),
                     "years_post_phd": data.get("years_post_phd"),
+                    "promotion_evidence": data.get("promotion_evidence", ""),
+                    "phd_evidence": data.get("phd_evidence", ""),
                 }
                 journals = {j: 0 for j in JOURNALS}
                 journals.update(data.get("journals", {}))
@@ -101,6 +103,8 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
                 "promotion_year": data.get("promotion_year"),
                 "promotion_university": data.get("promotion_university"),
                 "years_post_phd": data.get("years_post_phd"),
+                "promotion_evidence": data.get("promotion_evidence", ""),
+                "phd_evidence": data.get("phd_evidence", ""),
             }
 
             journals = {j: 0 for j in JOURNALS}
