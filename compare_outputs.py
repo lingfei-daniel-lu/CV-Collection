@@ -8,6 +8,7 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 
+INPUT_DIR = "output"
 OUTPUT_DIR = "output/compare"
 FILENAME_RE = re.compile(r"^output_(?P<model>.+)_(?P<date>\d{4}-\d{2}-\d{2})\.csv$")
 
@@ -47,10 +48,6 @@ def normalize_number(value: str) -> str:
 
 
 SET_SEPARATORS_RE = re.compile(r"[;|\n；]+")
-IGNORE_FIELDS = {
-    "promotion_evidence",
-    "phd_evidence",
-}
 
 
 def normalize_set(value: str) -> str:
@@ -128,8 +125,6 @@ def compare_date(date, model_paths, output_dir):
         all_fields.update(fieldnames)
 
     all_fields.discard("file")
-    for field in IGNORE_FIELDS:
-        all_fields.discard(field)
     all_files = sorted({f for rows in model_rows.values() for f in rows.keys()})
     models = sorted(model_rows.keys())
 
@@ -246,13 +241,19 @@ def main():
         help="Specific date (YYYY-MM-DD) to compare. If omitted, compare all dates with >=2 models.",
     )
     parser.add_argument(
+        "--input-dir",
+        default=INPUT_DIR,
+        help="Directory containing output_*.csv files.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=OUTPUT_DIR,
-        help="Directory containing output_*.csv files.",
+        help="Directory to write compare_*.csv files.",
     )
     args = parser.parse_args()
 
-    by_date = parse_output_files(args.output_dir)
+    by_date = parse_output_files(args.input_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
     if args.date:
         dates = [args.date]
     else:

@@ -51,8 +51,6 @@ def flush_rows_to_csv(rows: list[dict], out_csv: Path, journals: Iterable[str]):
         "promotion_year",
         "promotion_university",
         "years_post_phd",
-        "promotion_evidence",
-        "phd_evidence",
     ]
     journal_cols = list(journals)
     if not df.empty:

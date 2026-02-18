@@ -40,12 +40,10 @@ Return ONE JSON object with:
 • "promotion_year": four-digit year of the FIRST promotion from Assistant Professor to (tenure-track) Associate Professor. If the CV starts at Associate/tenured, use the first year they are listed as Associate/tenured. Ignore visiting/adjunct titles and roles explicitly labeled "without tenure".
 • "promotion_university": university where that promotion/tenure occurred (the institution named on the appointment line for that year), not later moves.
 • "years_post_phd": promotion_year minus PhD completion year; null if either year is missing.
-• "promotion_evidence": the single original CV line (verbatim) used to determine promotion_year/university; empty string if unavailable.
-• "phd_evidence": the single original CV line (verbatim) used to determine PhD completion year; empty string if unavailable.
 • "journals": object with EVERY journal key below and integer counts (0, 1, 2, ...). Never use booleans or null. Count peer-reviewed journal articles that are published/accepted/forthcoming. Do NOT count "under review", "revise and resubmit", "submitted", conference proceedings, book chapters, books, reports, or referee service. Deduplicate if the same paper appears twice. If a journal is absent, return 0.
 
 Tenure/promotion identification guidance:
-- Source priority: ONLY use information from sections titled "Academic Appointments", "Employment", or "Positions" (or close variants). If none exist, then use other sections as a fallback. Evidence lines must come from the source used.
+- Source priority: ONLY use information from sections titled "Academic Appointments", "Employment", or "Positions" (or close variants). If none exist, then use other sections as a fallback.
 - Default rule: the first Assistant Professor -> Associate Professor promotion counts as tenure unless the line explicitly says "without tenure"/"untenured". If "without tenure" is present, treat that move as non-tenure; then look for the next Associate/tenure line with tenure.
 - Fuzzy titles: treat wording like "promoted to Associate Professor", "awarded tenure", "continuous appointment", "tenure-track Associate Professor" as tenure events. Ignore purely administrative titles (e.g., "Associate Director") unless paired with Associate Professor.
 - Explicit exclusions: do NOT treat these as tenure-track promotions unless tenure is explicitly stated: visiting, adjunct, clinical, of practice, research, teaching, lecturer, instructor, emeritus, honorary, affiliate, non-tenure, without tenure.

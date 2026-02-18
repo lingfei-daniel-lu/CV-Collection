@@ -4,41 +4,32 @@ LLM client configuration and call helper, supporting multiple providers.
 
 from __future__ import annotations
 
-import os, sys, time
+import sys, time
 from dataclasses import dataclass
 from typing import Optional
 
 from openai import OpenAI
 
 MAX_RETRIES = 5
+POE_BASE_URL = "https://api.poe.com/v1"
+POE_API_KEY = "JE5GBA8SAxOWC0DCDDknGABJKEUidsGC54SzCCbIqJE"
 
 
 @dataclass(frozen=True)
 class ModelConfig:
     key: str
     model: str
-    api_key_env: str  # Env var name OR literal key
+    api_key: str
     base_url: str | None = None
     temperature: float = 0.4
-    model_env: str | None = None  # Optional env var to override the model name
 
     def build_client(self) -> OpenAI:
-        api_key = os.getenv(self.api_key_env)
-        # If env var is not set, fall back to the configured value as a literal key.
-        if not api_key:
-            api_key = self.api_key_env
-        if not api_key:
-            raise RuntimeError(f"Set env var {self.api_key_env} for {self.key}")
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": self.api_key}
         if self.base_url:
             kwargs["base_url"] = self.base_url
         return OpenAI(**kwargs)
 
     def resolved_model(self) -> str:
-        if self.model_env:
-            model = os.getenv(self.model_env, "").strip()
-            if model:
-                return model
         return self.model
 
 
@@ -46,22 +37,34 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     "deepseek": ModelConfig(
         key="deepseek",
         model="deepseek-chat",
-        api_key_env="sk-6f7094ece175423c992b4e231dcfbe49",
+        api_key="sk-6f7094ece175423c992b4e231dcfbe49",
         base_url="https://api.deepseek.com",
     ),
     "kimi": ModelConfig(
         key="kimi",
-        model="kimi-k2-0905-preview",
-        api_key_env="sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2",
+        model="kimi-k2-thinking",
+        api_key="sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2",
         base_url="https://api.moonshot.ai/v1",
     ),
-    # Poe provides an OpenAI-compatible API endpoint
-    "poe": ModelConfig(
-        key="poe",
+    # Poe models (fixed model names).
+    "gpt": ModelConfig(
+        key="gpt",
         model="gpt-5.2",
-        model_env="POE_MODEL",
-        api_key_env="IuB8CmzLrdDGrXpxIAxQSnOdwvX3MqrsjbIBKiChSuU",
-        base_url="https://api.poe.com/v1",
+        api_key=POE_API_KEY,
+        base_url=POE_BASE_URL,
+    ),
+    "claude": ModelConfig(
+        key="claude",
+        # model="claude-opus-4-6",  # Original choice, but more expensive and not much better than sonnet.
+        model="claude-sonnet-4-6",
+        api_key=POE_API_KEY,
+        base_url=POE_BASE_URL,
+    ),
+    "gemini": ModelConfig(
+        key="gemini",
+        model="gemini-3-flash",
+        api_key=POE_API_KEY,
+        base_url=POE_BASE_URL,
     ),
 }
 
@@ -70,13 +73,14 @@ class ModelClient:
     def __init__(self, config: ModelConfig):
         self.config = config
         self.client = config.build_client()
+        self.model = self.config.resolved_model()
 
     def chat_completion(self, cv_text: str, prompt: str) -> Optional[str]:
         """Call the configured chat model with retries."""
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = self.client.chat.completions.create(
-                    model=self.config.resolved_model(),
+                    model=self.model,
                     temperature=self.config.temperature,
                     messages=[
                         {"role": "user", "content": prompt},

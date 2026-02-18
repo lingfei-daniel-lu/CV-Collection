@@ -23,19 +23,32 @@ ROOT_FOLDER = BASE_DIR / "CV_word"
 OUTPUT_FOLDER = BASE_DIR / "output"
 EXPORT_DATE = date.today().isoformat()
 
-# Model selection (edit here). Example: ("deepseek", "kimi", "poe")
-MODEL_KEYS = ("deepseek", "kimi","poe")
-# Optional Poe model override. Leave empty to use provider default.
-POE_MODEL = "gpt-5.2"
-
-if POE_MODEL:
-    os.environ["POE_MODEL"] = POE_MODEL
+# Model selection (defaults to 5 independent outputs in one run).
+MODEL_KEYS = ("deepseek", "kimi", "gpt", "gemini", "claude")
 
 # LLM prompt kept separate for easy edits.
 PROMPT = get_prompt()
 CONCURRENCY = int(os.getenv("CV_CONCURRENCY", "4"))
 
 # ───────────────────────────── MAIN ──────────────────────────────────── #
+
+def build_row(rel: str, data: dict) -> dict:
+    row = {
+        "file": rel,
+        "name": data.get("name"),
+        "promotion_year": data.get("promotion_year"),
+        "promotion_university": data.get("promotion_university"),
+        "years_post_phd": data.get("years_post_phd"),
+    }
+    journals = {j: 0 for j in JOURNALS}
+    raw_journals = data.get("journals", {})
+    if not isinstance(raw_journals, dict):
+        print(f"⚠️  Invalid journals payload for {rel}; expected object, got {type(raw_journals).__name__}")
+        raw_journals = {}
+    journals.update(raw_journals)
+    row.update(journals)
+    return row
+
 
 def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
     client = get_model_client(model_key)
@@ -71,18 +84,7 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
                 if data is None:
                     continue
 
-                row = {
-                    "file": rel,
-                    "name": data.get("name"),
-                    "promotion_year": data.get("promotion_year"),
-                    "promotion_university": data.get("promotion_university"),
-                    "years_post_phd": data.get("years_post_phd"),
-                    "promotion_evidence": data.get("promotion_evidence", ""),
-                    "phd_evidence": data.get("phd_evidence", ""),
-                }
-                journals = {j: 0 for j in JOURNALS}
-                journals.update(data.get("journals", {}))
-                row.update(journals)
+                row = build_row(rel, data)
 
                 try:
                     flush_rows_to_csv([row], out_csv, JOURNALS)
@@ -97,19 +99,7 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
             if data is None:
                 continue
 
-            row = {
-                "file": rel,
-                "name": data.get("name"),
-                "promotion_year": data.get("promotion_year"),
-                "promotion_university": data.get("promotion_university"),
-                "years_post_phd": data.get("years_post_phd"),
-                "promotion_evidence": data.get("promotion_evidence", ""),
-                "phd_evidence": data.get("phd_evidence", ""),
-            }
-
-            journals = {j: 0 for j in JOURNALS}
-            journals.update(data.get("journals", {}))
-            row.update(journals)
+            row = build_row(rel, data)
 
             try:
                 flush_rows_to_csv([row], out_csv, JOURNALS)

@@ -7,12 +7,12 @@ from __future__ import annotations
 import json, os, sys
 
 from common_functions import docx_to_text, safe_json_load
-from cv_parser_main import MODEL_KEYS as DEFAULT_MODEL_KEYS, PROMPT, ROOT_FOLDER
+from cv_parser_main import PROMPT, ROOT_FOLDER
 from llm_client import get_model_client
 
 
-# Model selection for smoke test (include Poe by default).
-MODEL_KEYS = tuple(dict.fromkeys(DEFAULT_MODEL_KEYS + ("poe",)))
+# Model selection for smoke test.
+MODEL_KEYS = ("deepseek", "kimi", "gpt", "claude", "gemini")
 
 # Limit how many CVs are sent to each model (default: 2).
 SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "2"))
