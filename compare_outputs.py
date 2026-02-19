@@ -5,6 +5,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 
@@ -238,7 +239,7 @@ def main():
     )
     parser.add_argument(
         "--date",
-        help="Specific date (YYYY-MM-DD) to compare. If omitted, compare all dates with >=2 models.",
+        help="Specific date (YYYY-MM-DD) to compare. If omitted, compare today's date only.",
     )
     parser.add_argument(
         "--input-dir",
@@ -254,22 +255,15 @@ def main():
 
     by_date = parse_output_files(args.input_dir)
     os.makedirs(args.output_dir, exist_ok=True)
-    if args.date:
-        dates = [args.date]
-    else:
-        dates = sorted([d for d, files in by_date.items() if len(files) >= 2])
+    target_date = args.date or date.today().isoformat()
 
-    if not dates:
-        print("No dates with at least two model outputs found.")
+    model_paths = by_date.get(target_date, [])
+    if len(model_paths) < 2:
+        print(f"Skipping {target_date}: need at least two model outputs.")
         return
 
-    for date in dates:
-        model_paths = by_date.get(date, [])
-        if len(model_paths) < 2:
-            print(f"Skipping {date}: need at least two models.")
-            continue
-        diffs_path, summary_path = compare_date(date, model_paths, args.output_dir)
-        print(f"{date}: wrote {diffs_path} and {summary_path}")
+    diffs_path, summary_path = compare_date(target_date, model_paths, args.output_dir)
+    print(f"{target_date}: wrote {diffs_path} and {summary_path}")
 
 
 if __name__ == "__main__":

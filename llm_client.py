@@ -4,7 +4,7 @@ LLM client configuration and call helper, supporting multiple providers.
 
 from __future__ import annotations
 
-import sys, time
+import os, sys, time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -12,7 +12,32 @@ from openai import OpenAI
 
 MAX_RETRIES = 5
 POE_BASE_URL = "https://api.poe.com/v1"
-POE_API_KEY = "JE5GBA8SAxOWC0DCDDknGABJKEUidsGC54SzCCbIqJE"
+
+
+def _load_local_api_keys() -> dict[str, str]:
+    try:
+        from local_api_keys import API_KEYS as local_api_keys  # type: ignore
+    except Exception:
+        return {}
+    if not isinstance(local_api_keys, dict):
+        raise TypeError("local_api_keys.API_KEYS must be a dict[str, str].")
+    return {str(k): str(v).strip() for k, v in local_api_keys.items() if str(v).strip()}
+
+
+def _resolve_api_key(name: str) -> str:
+    value = LOCAL_API_KEYS.get(name) or os.getenv(name, "").strip()
+    if value:
+        return value
+    raise RuntimeError(
+        f"Missing API key '{name}'. Add it to local_api_keys.py "
+        f"or set environment variable {name}."
+    )
+
+
+LOCAL_API_KEYS = _load_local_api_keys()
+DEEPSEEK_API_KEY = _resolve_api_key("DEEPSEEK_API_KEY")
+KIMI_API_KEY = _resolve_api_key("KIMI_API_KEY")
+POE_API_KEY = _resolve_api_key("POE_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -37,13 +62,13 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     "deepseek": ModelConfig(
         key="deepseek",
         model="deepseek-chat",
-        api_key="sk-6f7094ece175423c992b4e231dcfbe49",
+        api_key=DEEPSEEK_API_KEY,
         base_url="https://api.deepseek.com",
     ),
     "kimi": ModelConfig(
         key="kimi",
         model="kimi-k2-thinking",
-        api_key="sk-KrRE2LB9Fph3WP9qdl0zFkhY2e3K7AV7svsspivea58PlJV2",
+        api_key=KIMI_API_KEY,
         base_url="https://api.moonshot.ai/v1",
     ),
     # Poe models (fixed model names).

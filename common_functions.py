@@ -1,5 +1,5 @@
 """
-Shared helpers for parsing CV docx files and writing results.
+Shared helpers for parsing CV files and writing results.
 """
 
 from __future__ import annotations
