@@ -61,7 +61,8 @@ class ModelConfig:
 MODEL_CONFIGS: dict[str, ModelConfig] = {
     "deepseek": ModelConfig(
         key="deepseek",
-        model="deepseek-chat",
+        # model="deepseek-chat",
+        model="deepseek-reasoner",
         api_key=DEEPSEEK_API_KEY,
         base_url="https://api.deepseek.com",
     ),
@@ -74,19 +75,21 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     # Poe models (fixed model names).
     "gpt": ModelConfig(
         key="gpt",
-        model="gpt-5.2",
+        # model="gpt-5.2",
+        model="gpt-5-mini",
         api_key=POE_API_KEY,
         base_url=POE_BASE_URL,
     ),
     "claude": ModelConfig(
         key="claude",
-        # model="claude-opus-4-6",  # Original choice, but more expensive and not much better than sonnet.
-        model="claude-sonnet-4-6",
+        # model="claude-opus-4-6"
+        model="claude-haiku-4-5",
         api_key=POE_API_KEY,
         base_url=POE_BASE_URL,
     ),
     "gemini": ModelConfig(
         key="gemini",
+        # model="gemini-3-pro",
         model="gemini-3-flash",
         api_key=POE_API_KEY,
         base_url=POE_BASE_URL,

@@ -2,120 +2,24 @@
 import argparse
 import json
 import os
-import re
+import sys
 from collections import Counter, defaultdict
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 
-
-INPUT_DIR = "output"
-OUTPUT_DIR = "output/aggregate"
-DEFAULT_MODELS = ("deepseek", "kimi", "gpt", "claude", "gemini")
-FILENAME_RE = re.compile(r"^output_(?P<model>.+)_(?P<date>\d{4}-\d{2}-\d{2})\.csv$")
-SET_SEPARATORS_RE = re.compile(r"[;|\n；]+")
-MISSING_TOKENS = {"", "missing", "n/a", "na", "none", "null", "unknown"}
-
-
-def is_missing(value) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip()
-    if text == "":
-        return True
-    return text.lower() in MISSING_TOKENS
-
-
-def _normalize_whitespace(text: str) -> str:
-    text = text.replace("\u00a0", " ")
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def normalize_text(value) -> str:
-    if is_missing(value):
-        return ""
-    return _normalize_whitespace(str(value)).lower()
-
-
-def normalize_number(value) -> str:
-    if is_missing(value):
-        return ""
-    text = str(value).strip()
-    try:
-        dec = Decimal(text)
-    except InvalidOperation:
-        return text
-    if dec == dec.to_integral():
-        return str(int(dec))
-    normalized = dec.normalize()
-    out = format(normalized, "f")
-    return out.rstrip("0").rstrip(".")
-
-
-def normalize_set(value) -> str:
-    if is_missing(value):
-        return ""
-    items = [normalize_text(item) for item in SET_SEPARATORS_RE.split(str(value))]
-    items = [item for item in items if item]
-    if not items:
-        return ""
-    return " | ".join(sorted(set(items)))
-
-
-def is_number_like(value) -> bool:
-    if is_missing(value):
-        return False
-    try:
-        Decimal(str(value).strip())
-        return True
-    except InvalidOperation:
-        return False
-
-
-def detect_field_type(values) -> str:
-    non_empty = [v for v in values if not is_missing(v)]
-    if not non_empty:
-        return "text"
-    if all(is_number_like(v) for v in non_empty):
-        return "number"
-    if any(SET_SEPARATORS_RE.search(str(v)) for v in non_empty):
-        return "set"
-    return "text"
-
-
-def normalize_value(field_type: str, value) -> str:
-    if field_type == "number":
-        return normalize_number(value)
-    if field_type == "set":
-        return normalize_set(value)
-    return normalize_text(value)
-
-
-def parse_output_files(input_dir: str):
-    by_date = defaultdict(dict)
-    for filename in os.listdir(input_dir):
-        match = FILENAME_RE.match(filename)
-        if not match:
-            continue
-        model = match.group("model")
-        date = match.group("date")
-        by_date[date][model] = os.path.join(input_dir, filename)
-    return by_date
-
-
-def read_csv_rows(path: str):
-    df = pd.read_csv(path, dtype=str).fillna("")
-    if "file" not in df.columns:
-        raise ValueError(f"Missing 'file' column in {path}")
-    rows = {}
-    for _, row in df.iterrows():
-        key = str(row.get("file", "")).strip()
-        if not key:
-            continue
-        rows[key] = {k: ("" if v is None else str(v)) for k, v in row.to_dict().items()}
-    return rows, list(df.columns)
-
+from cv_collection.config import AGGREGATE_OUTPUT_FOLDER, DEFAULT_MODEL_KEYS, OUTPUT_FOLDER
+from cv_collection.output_utils import (
+    detect_field_type,
+    is_missing,
+    normalize_value,
+    parse_output_files,
+    read_output_rows,
+)
 
 def choose_output_value(raw_values: list[str]) -> str:
     counts = Counter(raw_values)
@@ -126,7 +30,7 @@ def aggregate_date(date: str, model_paths: dict[str, str], models: list[str], ou
     model_rows = {}
     all_fields = set()
     for model in models:
-        rows, fieldnames = read_csv_rows(model_paths[model])
+        rows, fieldnames = read_output_rows(model_paths[model])
         model_rows[model] = rows
         all_fields.update(fieldnames)
 
@@ -203,11 +107,19 @@ def main():
         "--date",
         help="Specific date (YYYY-MM-DD). If omitted, process today's date only.",
     )
-    parser.add_argument("--input-dir", default=INPUT_DIR, help="Directory containing output_*.csv files.")
-    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Directory to write aggregate_*.csv files.")
+    parser.add_argument(
+        "--input-dir",
+        default=str(OUTPUT_FOLDER),
+        help="Directory containing output_*.csv files.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=str(AGGREGATE_OUTPUT_FOLDER),
+        help="Directory to write aggregate_*.csv files.",
+    )
     parser.add_argument(
         "--models",
-        default=",".join(DEFAULT_MODELS),
+        default=",".join(DEFAULT_MODEL_KEYS),
         help="Comma-separated model keys to aggregate (default: deepseek,kimi,gpt,claude,gemini).",
     )
     parser.add_argument(

@@ -4,7 +4,7 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
 
 ## 1. Project Goals
 
-- Batch-read faculty CVs from `CV_word/`.
+- Batch-read faculty CVs from `input/`.
 - Extract and normalize core fields:
   - `name`
   - `promotion_year` (first Assistant -> Associate/tenure-track promotion year)
@@ -16,7 +16,7 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
 
 ## 2. Current Code Functionality
 
-### `cv_parser_main.py`
+### `scripts/extract_cvs.py`
 
 - Main pipeline script.
 - Default model keys: `deepseek,kimi,gpt,gemini,claude`.
@@ -24,7 +24,7 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
 - Supports resume mode: if a same-day output CSV exists for a model, processed files are skipped.
 - Writes rows incrementally to CSV to reduce interruption risk.
 
-### `llm_client.py`
+### `cv_collection/llm_client.py`
 
 - Unified wrapper for OpenAI-compatible APIs across providers.
 - Currently configured models:
@@ -35,12 +35,12 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
   - `gemini-3-flash` (via Poe)
 - Includes exponential-backoff retries (up to 5 attempts).
 
-### `prompt_templates.py`
+### `cv_collection/prompt_templates.py`
 
 - Defines the target journal list `JOURNALS` (23 journals).
 - Defines the extraction prompt with JSON-only output, tenure/promotion rules, and counting criteria.
 
-### `compare_outputs.py`
+### `scripts/compare_model_outputs.py`
 
 - Reads same-date model outputs and compares normalized field-level values.
 - Default behavior (without `--date`): process today's outputs only.
@@ -49,7 +49,7 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
   - `compare_<date>_summary.csv`
 - Auto-detects field type (`text/number/set`) and compares values by type.
 
-### `aggregate_outputs.py`
+### `scripts/aggregate_model_outputs.py`
 
 - Aggregates same-date outputs by field-level majority voting.
 - Default behavior (without `--date`): process today's outputs only.
@@ -59,11 +59,11 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
   - `unresolved_details`
   - `needs_review`
 
-### `cv_parser_smoketest.py`
+### `scripts/smoke_test_extract.py`
 
 - Quick small-sample integration test script (default: 2 CVs per model; configurable via `CV_SMOKE_LIMIT`).
 
-### `common_functions.py`
+### `cv_collection/common_functions.py`
 
 - `.docx` text reader (skips hidden and invalid/non-zip files).
 - JSON cleaning/parsing for LLM responses.
@@ -73,19 +73,25 @@ Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structure
 
 ```text
 CV-Collection/
-├── CV_word/                      # Raw CV files (organized by school/rank)
+├── input/                        # Raw CV files (organized by school/rank)
 ├── output/
 │   ├── output_<model>_<date>.csv # Per-model raw extraction outputs
 │   ├── compare/                  # Cross-model comparison outputs
 │   └── aggregate/                # Majority-vote aggregation outputs
-├── cv_parser_main.py
-├── cv_parser_smoketest.py
-├── compare_outputs.py
-├── aggregate_outputs.py
-├── llm_client.py
+├── scripts/
+│   ├── extract_cvs.py
+│   ├── smoke_test_extract.py
+│   ├── compare_model_outputs.py
+│   ├── aggregate_model_outputs.py
+│   └── list_pending_docs.py
+├── cv_collection/
+│   ├── config.py
+│   ├── output_utils.py
+│   ├── llm_client.py
+│   ├── prompt_templates.py
+│   └── common_functions.py
 ├── local_api_keys.example.py     # API key template for collaborators
-├── prompt_templates.py
-└── common_functions.py
+└── local_api_keys.py             # Local private keys (gitignored)
 ```
 
 ## 4. How to Run
@@ -108,37 +114,37 @@ CV-Collection/
   - `DEEPSEEK_API_KEY`
   - `KIMI_API_KEY`
   - `POE_API_KEY`
-- Key resolution order in `llm_client.py`: `local_api_keys.py` first, environment variables second.
+- Key resolution order in `cv_collection/llm_client.py`: `local_api_keys.py` first, environment variables second.
 - If a required key is missing, the program raises a clear runtime error at import time.
 
 ### 4.3 Smoke Test
 
 ```bash
-python cv_parser_smoketest.py
+python -m scripts.smoke_test_extract
 ```
 
 Optional:
 
 ```bash
-CV_SMOKE_LIMIT=3 python cv_parser_smoketest.py
+CV_SMOKE_LIMIT=3 python -m scripts.smoke_test_extract
 ```
 
 ### 4.4 Full Extraction
 
 ```bash
-python cv_parser_main.py
+python -m scripts.extract_cvs
 ```
 
 Optional concurrency:
 
 ```bash
-CV_CONCURRENCY=6 python cv_parser_main.py
+CV_CONCURRENCY=6 python -m scripts.extract_cvs
 ```
 
 ### 4.5 Output Comparison (explicit output dir recommended)
 
 ```bash
-python compare_outputs.py --input-dir output --output-dir output/compare
+python -m scripts.compare_model_outputs --input-dir output --output-dir output/compare
 ```
 
 By default, this command only compares output files for today's date.
@@ -146,7 +152,7 @@ By default, this command only compares output files for today's date.
 ### 4.6 Multi-Model Aggregation (explicit output dir recommended)
 
 ```bash
-python aggregate_outputs.py --date 2026-02-18 --input-dir output --output-dir output/aggregate
+python -m scripts.aggregate_model_outputs --date 2026-02-18 --input-dir output --output-dir output/aggregate
 ```
 
 If `--date` is omitted, aggregation runs for today's date only.
@@ -155,7 +161,7 @@ If `--date` is omitted, aggregation runs for today's date only.
 
 ### Dataset Scale
 
-- `CV_word/` currently contains `789` `.docx` files.
+- `input/` currently contains `789` `.docx` files.
 - There are `2` `.doc` files (not read by code). Convert them to `.docx` manually before extraction.
 
 ### Model Output Files

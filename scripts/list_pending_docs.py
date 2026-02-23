@@ -6,7 +6,13 @@ List legacy .doc files that still need manual conversion to .docx.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cv_collection.config import INPUT_ROOT_FOLDER
 
 
 def list_doc_files(root: Path) -> list[Path]:
@@ -23,8 +29,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--root",
-        default="CV_word",
-        help="Root folder to scan (default: CV_word).",
+        default=str(INPUT_ROOT_FOLDER),
+        help="Root folder to scan (default: project input folder).",
     )
     parser.add_argument(
         "--absolute",
