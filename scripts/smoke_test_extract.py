@@ -10,13 +10,10 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cv_collection.common_functions import docx_to_text, safe_json_load
+from cv_collection.common_functions import docx_to_text
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER
 from cv_collection.llm_client import get_model_client
-from cv_collection.prompt_templates import get_prompt
-
-
-PROMPT = get_prompt()
+from cv_collection.staged_extraction import extract_cv_staged
 
 # Limit how many CVs are sent to each model (default: 2).
 SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "2"))
@@ -34,14 +31,9 @@ def smoke_model(model_key: str, docx_paths) -> None:
 
         print(f"\n── {model_key}: {rel} ──")
         try:
-            raw = client.chat_completion(cv_text, PROMPT)
+            data = extract_cv_staged(client, cv_text, rel)
         except Exception as e:
             print(f"⚠️  API call failed for {rel}: {e}")
-            continue
-
-        data = safe_json_load(raw, label=rel)
-        if data is None:
-            print("Raw response:\n", raw)
             continue
 
         # Print a concise summary so we can quickly validate the model output.
@@ -50,6 +42,7 @@ def smoke_model(model_key: str, docx_paths) -> None:
             "promotion_year": data.get("promotion_year"),
             "promotion_university": data.get("promotion_university"),
             "years_post_phd": data.get("years_post_phd"),
+            "sections_found": data.get("sections_found"),
         }
         print(json.dumps(summary, indent=2))
 

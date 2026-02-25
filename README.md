@@ -1,83 +1,124 @@
 # CV-Collection
 
-Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structured data with multiple LLMs, comparing cross-model outputs, and generating aggregated CSVs for human review.
+Batch pipeline for parsing economics faculty CVs (`.docx`), extracting structured data with multiple LLMs, comparing cross-model outputs, and generating aggregated CSVs for review.
 
-## 1. Project Goals
+## Project Goals
 
-- Batch-read faculty CVs from `input/`.
-- Extract and normalize core fields:
+- Read faculty CVs from `input/`
+- Extract core fields
   - `name`
-  - `promotion_year` (first Assistant -> Associate/tenure-track promotion year)
+  - `promotion_year`
   - `promotion_university`
   - `years_post_phd`
-  - Publication counts for 23 economics journals
-- Run multiple models in parallel and keep each model output separately.
-- Compare model outputs and aggregate by majority voting, with explicit flags for manual review.
+  - publication counts for 23 economics journals
+- Run multiple models and store per-model outputs separately
+- Compare and aggregate outputs across models
 
-## 2. Current Code Functionality
+## Current Extraction Flow (Staged Pipeline)
+
+The extraction pipeline used by `scripts/extract_cvs.py` and `scripts/smoke_test_extract.py` now uses a staged workflow implemented in `cv_collection/staged_extraction.py`:
+
+1. `.docx` -> structured text-like plain text (paragraphs + tables, preserving order as much as possible)
+2. Heuristic section detection (`education`, `employment`, `publications`, etc.)
+3. Publication section split into entry-level lines
+4. Main extraction
+   - metadata extraction with confidence fields
+   - publication extraction as per-journal year lists (internal)
+5. Targeted reprocessing for low-confidence metadata fields
+6. Verification pass (LLM cross-check against original CV text)
+7. Convert internal publication year lists back to journal counts for CSV output
+
+Notes:
+- Final CSV schema remains journal **counts** (compatible with existing compare/aggregate scripts).
+- The staged pipeline performs multiple LLM calls per CV, so it is slower than a single-pass prompt but usually improves extraction robustness.
+
+## Step-Level Cache (New)
+
+The staged pipeline includes disk cache for LLM step results (metadata / publications / retries / verification).
+
+- Cache location: `output/cache/staged_extraction/`
+- Cache key includes:
+  - model key/name
+  - temperature
+  - full message payload
+  - cache version
+- Cache is transparent: cache hit returns the previously parsed JSON for that step
+
+Disable cache temporarily:
+
+```bash
+CV_STAGE_CACHE_DISABLE=1 python -m scripts.smoke_test_extract
+```
+
+## Core Scripts
 
 ### `scripts/extract_cvs.py`
 
-- Main pipeline script.
-- Default model keys: `deepseek,kimi,gpt,gemini,claude`.
-- Supports concurrent calls (`CV_CONCURRENCY`, default `4`).
-- Supports resume mode: if a same-day output CSV exists for a model, processed files are skipped.
-- Writes rows incrementally to CSV to reduce interruption risk.
-
-### `cv_collection/llm_client.py`
-
-- Unified wrapper for OpenAI-compatible APIs across providers.
-- Currently configured models:
-  - `deepseek-chat`
-  - `kimi-k2-thinking`
-  - `gpt-5.2` (via Poe)
-  - `claude-sonnet-4-6` (via Poe) (used `claude-opus-4-6` for Feb 19th version)
-  - `gemini-3-flash` (via Poe)
-- Includes exponential-backoff retries (up to 5 attempts).
-
-### `cv_collection/prompt_templates.py`
-
-- Defines the target journal list `JOURNALS` (23 journals).
-- Defines the extraction prompt with JSON-only output, tenure/promotion rules, and counting criteria.
-
-### `scripts/compare_model_outputs.py`
-
-- Reads same-date model outputs and compares normalized field-level values.
-- Default behavior (without `--date`): process today's outputs only.
-- Generates:
-  - `compare_<date>_diffs.csv`
-  - `compare_<date>_summary.csv`
-- Auto-detects field type (`text/number/set`) and compares values by type.
-
-### `scripts/aggregate_model_outputs.py`
-
-- Aggregates same-date outputs by field-level majority voting.
-- Default behavior (without `--date`): process today's outputs only.
-- If vote ties or all values are missing, marks fields unresolved and writes:
-  - `unresolved_count`
-  - `unresolved_fields`
-  - `unresolved_details`
-  - `needs_review`
+- Main batch extraction pipeline
+- Uses the staged extractor (`cv_collection/staged_extraction.py`)
+- Supports concurrency via `CV_CONCURRENCY` (default `4`)
+- Resume mode: skips files already present in same-day output CSV
+- Writes rows incrementally to reduce interruption risk
 
 ### `scripts/smoke_test_extract.py`
 
-- Quick small-sample integration test script (default: 2 CVs per model; configurable via `CV_SMOKE_LIMIT`).
+- Small-sample integration test (default `2` CVs per model)
+- Uses staged pipeline, so runtime can be non-trivial
+- Configure sample size with `CV_SMOKE_LIMIT`
+
+### `scripts/compare_model_outputs.py`
+
+- Compares same-date model outputs field-by-field
+- Generates:
+  - `compare_<date>_diffs.csv`
+  - `compare_<date>_summary.csv`
+
+### `scripts/aggregate_model_outputs.py`
+
+- Aggregates same-date model outputs by field-level majority voting
+- Marks unresolved fields and rows needing review
+
+## Core Modules
+
+### `cv_collection/staged_extraction.py`
+
+- Section detection
+- Publication entry splitting
+- Metadata extraction with confidence
+- Targeted retry for low-confidence fields
+- Verification pass
+- Step-level LLM response cache
 
 ### `cv_collection/common_functions.py`
 
-- `.docx` text reader (skips hidden and invalid/non-zip files).
-- JSON cleaning/parsing for LLM responses.
-- Shared CSV flushing helper.
+- `.docx` text extraction (paragraphs + tables, preserving document order where possible)
+- JSON cleanup/parsing for LLM responses
+- Shared CSV writer
 
-## 3. Project Structure (Core)
+### `cv_collection/llm_client.py`
+
+- Unified OpenAI-compatible API wrapper across providers
+- Exponential backoff retry
+- Supports both:
+  - simple prompt + text calls (`chat_completion`)
+  - multi-message calls (`chat_messages`) for staged pipeline
+
+### `cv_collection/prompt_templates.py`
+
+- Canonical journal list (`JOURNALS`, 23 journals)
+- Legacy single-pass prompt template (still kept in repo for reference/compatibility)
+
+## Project Structure (Core)
 
 ```text
 CV-Collection/
-├── input/                        # Raw CV files (organized by school/rank)
+├── input/                            # Raw CV files (organized by school/rank)
 ├── output/
-│   ├── output_<model>_<date>.csv # Per-model raw extraction outputs
-│   ├── compare/                  # Cross-model comparison outputs
-│   └── aggregate/                # Majority-vote aggregation outputs
+│   ├── output_<model>_<date>.csv     # Per-model extraction outputs (journal counts)
+│   ├── cache/
+│   │   └── staged_extraction/        # Step-level LLM cache
+│   ├── compare/                      # Cross-model comparison outputs
+│   └── aggregate/                    # Majority-vote aggregation outputs
 ├── scripts/
 │   ├── extract_cvs.py
 │   ├── smoke_test_extract.py
@@ -86,17 +127,16 @@ CV-Collection/
 │   └── list_pending_docs.py
 ├── cv_collection/
 │   ├── config.py
-│   ├── output_utils.py
 │   ├── llm_client.py
+│   ├── staged_extraction.py
 │   ├── prompt_templates.py
-│   └── common_functions.py
-├── local_api_keys.example.py     # API key template for collaborators
-└── local_api_keys.py             # Local private keys (gitignored)
+│   ├── common_functions.py
+│   └── output_utils.py
+├── local_api_keys.example.py         # API key template for collaborators
+└── local_api_keys.py                 # Local private keys (gitignored)
 ```
 
-## 4. How to Run
-
-### 4.1 Requirements
+## Requirements
 
 - Python 3.10+
 - Main dependencies:
@@ -104,32 +144,35 @@ CV-Collection/
   - `tqdm`
   - `python-docx`
   - `openai`
-- Input requirement: this pipeline reads `.docx` only. Convert any legacy `.doc` files to `.docx` manually before running.
+- Input requirement: `.docx` only (convert legacy `.doc` manually)
 
-### 4.2 API Key Rules for Collaborators
+## API Keys (Collaborators)
 
-- `local_api_keys.py` is the local private key file and is ignored by Git.
-- Never commit real API keys to the repository.
-- Copy `local_api_keys.example.py` to `local_api_keys.py`, then fill your own keys:
+- `local_api_keys.py` is local-only and gitignored
+- Copy `local_api_keys.example.py` to `local_api_keys.py`
+- Fill required keys:
   - `DEEPSEEK_API_KEY`
   - `KIMI_API_KEY`
   - `POE_API_KEY`
-- Key resolution order in `cv_collection/llm_client.py`: `local_api_keys.py` first, environment variables second.
-- If a required key is missing, the program raises a clear runtime error at import time.
+- Resolution order in `cv_collection/llm_client.py`:
+  1. `local_api_keys.py`
+  2. environment variables
 
-### 4.3 Smoke Test
+## How to Run
+
+### Smoke Test
 
 ```bash
 python -m scripts.smoke_test_extract
 ```
 
-Optional:
+Optional (faster):
 
 ```bash
-CV_SMOKE_LIMIT=3 python -m scripts.smoke_test_extract
+CV_SMOKE_LIMIT=1 python -m scripts.smoke_test_extract
 ```
 
-### 4.4 Full Extraction
+### Full Extraction
 
 ```bash
 python -m scripts.extract_cvs
@@ -141,63 +184,22 @@ Optional concurrency:
 CV_CONCURRENCY=6 python -m scripts.extract_cvs
 ```
 
-### 4.5 Output Comparison (explicit output dir recommended)
+### Compare Model Outputs
 
 ```bash
 python -m scripts.compare_model_outputs --input-dir output --output-dir output/compare
 ```
 
-By default, this command only compares output files for today's date.
-
-### 4.6 Multi-Model Aggregation (explicit output dir recommended)
+### Aggregate Model Outputs
 
 ```bash
 python -m scripts.aggregate_model_outputs --date 2026-02-18 --input-dir output --output-dir output/aggregate
 ```
 
-If `--date` is omitted, aggregation runs for today's date only.
+If `--date` is omitted in compare/aggregate scripts, they process today's outputs by default.
 
-## 5. Progress Snapshot (as of 2026-02-19)
+## Notes / Known Constraints
 
-### Dataset Scale
-
-- `input/` currently contains `789` `.docx` files.
-- There are `2` `.doc` files (not read by code). Convert them to `.docx` manually before extraction.
-
-### Model Output Files
-
-- `2025-12-30`: `deepseek(285)`, `kimi(283)`.
-- `2026-02-02`: `deepseek(798)`, `kimi(809)`, `poe(866)` (historical batch; naming not fully aligned with current setup).
-- `2026-02-18`:
-  - `deepseek(789)`
-  - `gpt(789)`
-  - `gemini(789)`
-  - `kimi(783)` (missing 6)
-  - `claude(777)` (missing 12)
-
-### Comparison Results
-
-- Existing `compare` dates: `2025-12-30`, `2026-02-02`, `2026-02-18`.
-- `2026-02-18` comparison base size: `789` files.
-- Highest-diff fields (`2026-02-18`):
-  - `promotion_university`: `diff_rate=0.2801`
-  - `AMERICAN ECONOMIC REVIEW`: `diff_rate=0.2433`
-  - `years_post_phd`: `diff_rate=0.2357`
-  - `promotion_year`: `diff_rate=0.2117`
-
-### Aggregation Results
-
-- Generated: `output/aggregate/aggregate_2026-02-18.csv` (`789` rows).
-- Rows with `needs_review=1`: `200` (~`25.35%`).
-- Unresolved reason counts (field-level): `tie=209`, `all_missing=142`.
-
-## 6. Known Issues and Risks (Dev Memo)
-
-- Output quality still varies by model; `promotion_*` and `years_post_phd` are the main disagreement fields.
-- `.doc` files are not parsed directly; manual conversion to `.docx` is required.
-
-## 7. Next Steps (Priority)
-
-- P1: Add a manual-review workflow script (export subsets where `needs_review=1`).
-- P1: Add a lightweight preflight check that lists remaining `.doc` files before run.
-- P2: Build a small human-labeled benchmark set to quantify per-field model accuracy.
+- `.doc` files are not parsed directly.
+- Staged extraction may be slow on full runs because each CV can trigger multiple LLM calls.
+- Cache significantly helps repeated runs, interrupted resumes, and prompt/threshold tuning cycles.

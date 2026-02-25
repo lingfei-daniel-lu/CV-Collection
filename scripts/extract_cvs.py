@@ -15,17 +15,16 @@ if __package__ in (None, ""):
 import pandas as pd
 from tqdm import tqdm
 
-from cv_collection.common_functions import docx_to_text, flush_rows_to_csv, safe_json_load
+from cv_collection.common_functions import docx_to_text, flush_rows_to_csv
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER, OUTPUT_FOLDER
 from cv_collection.llm_client import get_model_client
-from cv_collection.prompt_templates import JOURNALS, get_prompt
+from cv_collection.prompt_templates import JOURNALS
+from cv_collection.staged_extraction import extract_cv_staged
 
 # ───────────────────────── USER SETTINGS ─────────────────────────────── #
 
 EXPORT_DATE = date.today().isoformat()
 
-# LLM prompt kept separate for easy edits.
-PROMPT = get_prompt()
 CONCURRENCY = int(os.getenv("CV_CONCURRENCY", "4"))
 
 # ───────────────────────────── MAIN ──────────────────────────────────── #
@@ -48,18 +47,15 @@ def build_row(rel: str, data: dict) -> dict:
     return row
 
 
-def fetch_model_response(client, model_key: str, rel: str, cv_text: str) -> str | None:
+def fetch_model_response(client, model_key: str, rel: str, cv_text: str) -> dict | None:
     try:
-        return client.chat_completion(cv_text, PROMPT)
+        return extract_cv_staged(client, cv_text, rel)
     except Exception as e:
         print(f"⚠️  {model_key} failed on {rel}: {e}")
         return None
 
 
-def write_model_result(rel: str, raw: str | None, out_csv: Path) -> bool:
-    if raw is None:
-        return False
-    data = safe_json_load(raw, label=rel)
+def write_model_result(rel: str, data: dict | None, out_csv: Path) -> bool:
     if data is None:
         return False
 

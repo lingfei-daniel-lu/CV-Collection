@@ -103,17 +103,14 @@ class ModelClient:
         self.client = config.build_client()
         self.model = self.config.resolved_model()
 
-    def chat_completion(self, cv_text: str, prompt: str) -> Optional[str]:
-        """Call the configured chat model with retries."""
+    def chat_messages(self, messages: list[dict[str, str]]) -> Optional[str]:
+        """Call the configured chat model with arbitrary message payloads."""
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model,
                     temperature=self.config.temperature,
-                    messages=[
-                        {"role": "user", "content": prompt},
-                        {"role": "user", "content": cv_text},
-                    ],
+                    messages=messages,
                 )
                 return resp.choices[0].message.content.strip()
 
@@ -128,6 +125,15 @@ class ModelClient:
                 time.sleep(wait)
 
         return None
+
+    def chat_completion(self, cv_text: str, prompt: str) -> Optional[str]:
+        """Backward-compatible wrapper for the original prompt + text call shape."""
+        return self.chat_messages(
+            [
+                {"role": "user", "content": prompt},
+                {"role": "user", "content": cv_text},
+            ]
+        )
 
 
 def get_model_client(key: str) -> ModelClient:
