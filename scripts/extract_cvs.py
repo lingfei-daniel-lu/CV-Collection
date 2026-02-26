@@ -17,8 +17,8 @@ from tqdm import tqdm
 
 from cv_collection.common_functions import docx_to_text, flush_rows_to_csv
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER, OUTPUT_FOLDER
+from cv_collection.journal_taxonomy import JOURNALS
 from cv_collection.llm_client import get_model_client
-from cv_collection.prompt_templates import JOURNALS
 from cv_collection.staged_extraction import extract_cv_staged
 
 # ───────────────────────── USER SETTINGS ─────────────────────────────── #

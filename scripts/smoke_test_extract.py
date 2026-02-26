@@ -16,7 +16,7 @@ from cv_collection.llm_client import get_model_client
 from cv_collection.staged_extraction import extract_cv_staged
 
 # Limit how many CVs are sent to each model (default: 2).
-SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "2"))
+SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "1"))
 
 
 def smoke_model(model_key: str, docx_paths) -> None:

@@ -21,7 +21,13 @@ from typing import Any
 
 from cv_collection.common_functions import safe_json_load
 from cv_collection.config import OUTPUT_FOLDER
-from cv_collection.prompt_templates import JOURNALS
+from cv_collection.journal_taxonomy import JOURNALS
+from cv_collection.staged_prompts import (
+    build_metadata_prompt,
+    build_publication_prompt,
+    build_targeted_retry_prompt,
+    build_verification_prompt,
+)
 
 
 CONFIDENCE_THRESHOLD = 0.8
@@ -78,85 +84,6 @@ _NEW_ENTRY = re.compile(
     r")"
 )
 
-
-JOURNALS_BULLET = "\n".join("* " + j for j in JOURNALS)
-
-
-METADATA_PROMPT = """\
-ONLY RETURN JSON. NO MARKDOWN. NO COMMENTARY.
-
-TASK
------
-Extract the following from the academic CV text below.
-For EVERY field also return a confidence score (0.0 = pure guess, 1.0 = unambiguous).
-
-Return this exact JSON structure:
-{
-  "name": "full name or null",
-  "name_confidence": 0.0,
-  "promotion_year": null,
-  "promotion_year_confidence": 0.0,
-  "promotion_university": null,
-  "promotion_university_confidence": 0.0,
-  "years_post_phd": null,
-  "years_post_phd_confidence": 0.0
-}
-
-DEFINITIONS
-- name: the CV owner's full name
-- promotion_year: calendar year promoted to Associate Professor OR Reader
-- promotion_university: institution where that promotion occurred
-- years_post_phd: integer years between PhD completion and that promotion
-
-RULES
-- Be conservative. Only extract explicitly stated facts.
-- If a field cannot be determined, return null with confidence 0.0.
-- Do NOT infer or guess.
-- Do NOT wrap output in backticks.
-"""
-
-
-PUBLICATION_PROMPT = (
-    "ONLY RETURN JSON. NO MARKDOWN. NO COMMENTARY.\n\n"
-    "TASK\n-----\n"
-    "Below are individual publication entries extracted from an academic CV.\n"
-    "For each of the journals listed below, identify every PUBLISHED article\n"
-    "and return the PUBLICATION YEAR of each one.\n\n"
-    + JOURNALS_BULLET
-    + "\n\n"
-    "MATCHING RULES\n"
-    "- Match common abbreviations:\n"
-    "  AER = AMERICAN ECONOMIC REVIEW, QJE = QUARTERLY JOURNAL OF ECONOMICS,\n"
-    "  JPE = JOURNAL OF POLITICAL ECONOMY, RES/RESTUD = REVIEW OF ECONOMIC STUDIES,\n"
-    "  RESTAT = REVIEW OF ECONOMICS AND STATISTICS,\n"
-    "  AEJ: Macro/Applied/Policy/Micro = corresponding AEJ variants,\n"
-    "  IER = INTERNATIONAL ECONOMIC REVIEW, JET = JOURNAL OF ECONOMIC THEORY,\n"
-    "  JDE = JOURNAL OF DEVELOPMENT ECONOMICS,\n"
-    "  JEEA = JOURNAL OF THE EUROPEAN ECONOMIC ASSOCIATION,\n"
-    "  JME = JOURNAL OF MONETARY ECONOMICS, JIE = JOURNAL OF INTERNATIONAL ECONOMICS,\n"
-    "  JPubE = JOURNAL OF PUBLIC ECONOMICS, JLE = JOURNAL OF LABOR ECONOMICS,\n"
-    "  RAND = RAND JOURNAL OF ECONOMICS.\n"
-    "- Match italicised or abbreviated journal names.\n"
-    "- Only count PUBLISHED articles (not forthcoming, R&R, working papers, or under review).\n"
-    "- Extract the publication year from each matching entry.\n\n"
-    "Return JSON:\n"
-    "{\n"
-    '  "journals": {\n'
-    '    "QUARTERLY JOURNAL OF ECONOMICS": [2005, 2012] or false,\n'
-    '    "AMERICAN ECONOMIC REVIEW": [2018] or false,\n'
-    "    ... (include ALL journals from the list)\n"
-    "  }\n"
-    "}\n\n"
-    "For each journal:\n"
-    "- If there are matching published articles, return a LIST of integer years\n"
-    "  (one year per article, in chronological order). Duplicates are allowed\n"
-    "  if multiple articles were published in the same journal in the same year.\n"
-    "- If there are NO matching articles, return false.\n"
-    "- If a year cannot be determined for a specific article, use null in the list.\n"
-    "Do NOT wrap JSON in backticks."
-)
-
-
 FIELD_HINTS: dict[str, str] = {
     "name": "The full name of the CV owner. Usually at the very top of the document.",
     "promotion_year": (
@@ -192,7 +119,13 @@ def detect_sections(text: str) -> dict[str, str]:
     result: dict[str, str] = {"full_text": text}
     for idx, (name, start) in enumerate(hits):
         end = hits[idx + 1][1] if idx + 1 < len(hits) else len(lines)
-        result[name] = "\n".join(lines[start:end])
+        chunk = "\n".join(lines[start:end])
+        if name in result:
+            # Some CVs contain multiple sections with the same header (e.g., "Selected Publications"
+            # and a later "Publications" block). Preserve all matched chunks instead of overwriting.
+            result[name] += "\n\n" + chunk
+        else:
+            result[name] = chunk
     return result
 
 
@@ -232,6 +165,8 @@ def split_publications(pub_text: str) -> list[str]:
         entries.append(" ".join(current))
 
     return [entry for entry in entries if len(entry) > 25]
+
+
 def _cache_path(client, messages: list[dict[str, str]]) -> Path | None:
     if os.getenv("CV_STAGE_CACHE_DISABLE", "").strip().lower() in {"1", "true", "yes"}:
         return None
@@ -309,6 +244,69 @@ def _metadata_input(sections: dict[str, str]) -> str:
     return "\n\n".join(chunks)
 
 
+def _parse_confidence(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_verification_block(title: str, content: str) -> str:
+    body = content.strip()
+    return f"=== {title} ===\n{body}" if body else f"=== {title} ==="
+
+
+def _build_verification_context(sections: dict[str, str]) -> str | None:
+    """
+    Build a section-aware verification context without risky truncation.
+
+    Long-CV fallback strategy:
+    - prefer metadata + publications evidence
+    - then publications-only evidence
+    - if no publications section exists, allow metadata-only context
+    - otherwise return None and skip verification
+    """
+    full_text = sections["full_text"]
+    if len(full_text) <= MAX_VERIFY_CHARS:
+        return full_text
+
+    top = "\n".join(full_text.split("\n")[:40]).strip()
+    base_blocks: list[str] = []
+    if top:
+        base_blocks.append(_format_verification_block("TOP OF CV", top))
+    for key in ("education", "employment"):
+        value = sections.get(key, "").strip()
+        if value:
+            base_blocks.append(_format_verification_block(key.upper(), value))
+    base_context = "\n\n".join(base_blocks).strip()
+
+    pub_value = sections.get("publications", "").strip()
+    if not pub_value:
+        if base_context and len(base_context) <= MAX_VERIFY_CHARS:
+            return base_context
+        return None
+    pub_block = _format_verification_block("PUBLICATIONS", pub_value)
+
+    working_value = sections.get("working_papers", "").strip()
+    working_block = (
+        _format_verification_block("WORKING_PAPERS", working_value) if working_value else ""
+    )
+
+    candidates: list[str] = []
+    if base_context:
+        if working_block:
+            candidates.append("\n\n".join([base_context, pub_block, working_block]).strip())
+        candidates.append("\n\n".join([base_context, pub_block]).strip())
+    if working_block:
+        candidates.append("\n\n".join([pub_block, working_block]).strip())
+    candidates.append(pub_block)
+
+    for candidate in candidates:
+        if candidate and len(candidate) <= MAX_VERIFY_CHARS:
+            return candidate
+    return None
+
+
 def _normalise_years(val: Any) -> list[int]:
     if val is None or val is False or val == 0:
         return []
@@ -331,7 +329,7 @@ def extract_metadata(client, sections: dict[str, str], label: str) -> dict[str, 
     data = _call_json(
         client,
         [
-            {"role": "user", "content": METADATA_PROMPT},
+            {"role": "user", "content": build_metadata_prompt()},
             {"role": "user", "content": _metadata_input(sections)},
         ],
         label=f"{label}/meta",
@@ -348,7 +346,7 @@ def extract_publications(client, sections: dict[str, str], label: str) -> dict[s
     data = _call_json(
         client,
         [
-            {"role": "user", "content": PUBLICATION_PROMPT},
+            {"role": "user", "content": build_publication_prompt()},
             {"role": "user", "content": "PUBLICATION ENTRIES:\n\n" + numbered},
         ],
         label=f"{label}/pubs",
@@ -356,28 +354,72 @@ def extract_publications(client, sections: dict[str, str], label: str) -> dict[s
     return data or {"journals": {}}
 
 
-def targeted_reprocess(client, field: str, sections: dict[str, str], label: str) -> dict[str, Any] | None:
-    hint = FIELD_HINTS.get(field, "")
-    prompt = (
-        "ONLY RETURN JSON. NO MARKDOWN. NO COMMENTARY.\n\n"
-        f"TASK: Re-examine this CV VERY carefully to extract ONE field: {field}\n\n"
-        f"{hint}\n\n"
-        "Return JSON:\n"
-        "{\n"
-        f'  "{field}": <value or null>,\n'
-        f'  "{field}_confidence": <float 0.0-1.0>\n'
-        "}\n\n"
-        "Be extremely precise. Only state what is explicitly written.\n"
-        "Do NOT wrap output in backticks."
-    )
+def targeted_reprocess(
+    client, fields: list[str], sections: dict[str, str], label: str
+) -> dict[str, Any] | None:
+    requested = [field for field in fields if field in CONF_FIELDS]
+    if not requested:
+        return None
+    hint_by_field = {field: FIELD_HINTS.get(field, "") for field in requested}
     return _call_json(
         client,
         [
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": build_targeted_retry_prompt(requested, hint_by_field),
+            },
             {"role": "user", "content": sections["full_text"]},
         ],
-        label=f"{label}/retry_{field}",
+        label=f"{label}/retry_meta",
     )
+
+
+def _verification_payload(extracted: dict[str, Any]) -> dict[str, Any]:
+    journals_for_verify: dict[str, list[int] | bool] = {}
+    raw_years = extracted.get("journal_years", {})
+    for journal in JOURNALS:
+        years = _normalise_years(raw_years.get(journal, [])) if isinstance(raw_years, dict) else []
+        journals_for_verify[journal] = years if years else False
+    return {
+        "name": extracted.get("name"),
+        "promotion_year": extracted.get("promotion_year"),
+        "promotion_university": extracted.get("promotion_university"),
+        "years_post_phd": extracted.get("years_post_phd"),
+        "journals": journals_for_verify,
+    }
+
+
+def _should_run_verification(
+    merged: dict[str, Any],
+    sections: dict[str, str],
+    *,
+    confidence_threshold: float,
+) -> bool:
+    """
+    Simple risk-based trigger to avoid unnecessary verification calls.
+
+    Run verification only when extraction looks uncertain or structurally risky.
+    """
+    meta_conf = merged.get("metadata_confidence", {})
+    if isinstance(meta_conf, dict):
+        for field in CONF_FIELDS:
+            if _parse_confidence(meta_conf.get(field, 0.0)) < confidence_threshold:
+                return True
+
+    # If key sections are missing, upstream extraction had to rely on weaker context.
+    if "employment" not in sections or "publications" not in sections:
+        return True
+
+    # Publication/working-paper separation is a common confusion source when target-journal hits exist.
+    has_working_papers = bool(sections.get("working_papers", "").strip())
+    if has_working_papers:
+        journal_years = merged.get("journal_years", {})
+        if isinstance(journal_years, dict) and any(
+            isinstance(v, list) and len(v) > 0 for v in journal_years.values()
+        ):
+            return True
+
+    return False
 
 
 def verification_pass(
@@ -386,56 +428,22 @@ def verification_pass(
     sections: dict[str, str],
     label: str,
 ) -> dict[str, Any] | None:
-    journals_for_verify: dict[str, list[int] | bool] = {}
-    raw_years = extracted.get("journal_years", {})
-    for journal in JOURNALS:
-        years = _normalise_years(raw_years.get(journal, [])) if isinstance(raw_years, dict) else []
-        journals_for_verify[journal] = years if years else False
-
-    verify_data = {
-        "name": extracted.get("name"),
-        "promotion_year": extracted.get("promotion_year"),
-        "promotion_university": extracted.get("promotion_university"),
-        "years_post_phd": extracted.get("years_post_phd"),
-        "journals": journals_for_verify,
-    }
-
-    cv_text = sections["full_text"]
-    if len(cv_text) > MAX_VERIFY_CHARS:
-        cv_text = cv_text[:MAX_VERIFY_CHARS] + "\n[... truncated ...]"
-
-    prompt = (
-        "ONLY RETURN JSON. NO MARKDOWN. NO COMMENTARY.\n\n"
-        "TASK: Verify and correct the extracted data below against the original CV.\n\n"
-        "EXTRACTED DATA:\n"
-        + json.dumps(verify_data, indent=2)
-        + "\n\n"
-        "CHECK EACH FIELD:\n"
-        "1. Is 'name' correct?\n"
-        "2. Is 'promotion_year' the actual year of promotion to Associate Professor or Reader?\n"
-        "3. Is 'promotion_university' correct?\n"
-        "4. Is 'years_post_phd' correctly calculated (promotion_year minus PhD year)?\n"
-        "5. For each journal, verify that:\n"
-        "   a) Every listed article actually appears in the CV\n"
-        "   b) The publication years are correct\n"
-        "   c) No published articles in these journals were missed\n"
-        "   d) Only PUBLISHED articles are counted (not forthcoming, R&R, etc.)\n"
-        "   Target journals:\n"
-        + JOURNALS_BULLET
-        + "\n\n"
-        "Return the CORRECTED JSON with the EXACT same structure as above.\n"
-        "For journals, return a list of integer years (one per article) or false.\n"
-        "Keep correct fields unchanged. Fix wrong ones. Set unknowable fields to null.\n"
-        "Do NOT wrap output in backticks."
-    )
-    return _call_json(
+    verify_data = _verification_payload(extracted)
+    verify_context = _build_verification_context(sections)
+    if not verify_context:
+        return None
+    verified = _call_json(
         client,
         [
-            {"role": "user", "content": prompt},
-            {"role": "user", "content": "ORIGINAL CV:\n\n" + cv_text},
+            {
+                "role": "user",
+                "content": build_verification_prompt(verify_data),
+            },
+            {"role": "user", "content": "ORIGINAL CV:\n\n" + verify_context},
         ],
         label=f"{label}/verify",
     )
+    return verified
 
 
 def extract_cv_staged(
@@ -451,24 +459,25 @@ def extract_cv_staged(
     meta = extract_metadata(client, sections, label)
     pubs = extract_publications(client, sections, label)
 
+    low_conf_fields: list[str] = []
+    old_conf_by_field: dict[str, float] = {}
     for field in CONF_FIELDS:
         conf_key = f"{field}_confidence"
-        try:
-            conf = float(meta.get(conf_key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            conf = 0.0
-        if conf >= confidence_threshold:
-            continue
-        retry = targeted_reprocess(client, field, sections, label)
-        if not isinstance(retry, dict):
-            continue
-        try:
-            new_conf = float(retry.get(conf_key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            new_conf = 0.0
-        if new_conf > conf:
-            meta[field] = retry.get(field)
-            meta[conf_key] = new_conf
+        conf = _parse_confidence(meta.get(conf_key, 0.0))
+        old_conf_by_field[field] = conf
+        if conf < confidence_threshold:
+            low_conf_fields.append(field)
+
+    if low_conf_fields:
+        retry = targeted_reprocess(client, low_conf_fields, sections, label)
+        if isinstance(retry, dict):
+            for field in low_conf_fields:
+                conf_key = f"{field}_confidence"
+                conf = old_conf_by_field.get(field, 0.0)
+                new_conf = _parse_confidence(retry.get(conf_key, 0.0))
+                if new_conf > conf:
+                    meta[field] = retry.get(field)
+                    meta[conf_key] = new_conf
 
     journal_years: dict[str, list[int]] = {}
     raw_journals = pubs.get("journals", {}) if isinstance(pubs, dict) else {}
@@ -490,13 +499,18 @@ def extract_cv_staged(
     }
 
     if do_verification:
-        verified = verification_pass(client, merged, sections, label)
+        should_verify = _should_run_verification(
+            merged,
+            sections,
+            confidence_threshold=confidence_threshold,
+        )
+        verified = verification_pass(client, merged, sections, label) if should_verify else None
         if isinstance(verified, dict):
             for key in ("name", "promotion_year", "promotion_university", "years_post_phd"):
                 if key in verified:
                     merged[key] = verified.get(key)
             verified_journals = verified.get("journals", {})
-            if isinstance(verified_journals, dict):
+            if "publications" in sections and isinstance(verified_journals, dict):
                 for journal in JOURNALS:
                     merged["journal_years"][journal] = _normalise_years(
                         verified_journals.get(journal, False)

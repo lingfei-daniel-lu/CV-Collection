@@ -36,7 +36,9 @@ def _resolve_api_key(name: str) -> str:
 
 LOCAL_API_KEYS = _load_local_api_keys()
 DEEPSEEK_API_KEY = _resolve_api_key("DEEPSEEK_API_KEY")
-KIMI_API_KEY = _resolve_api_key("KIMI_API_KEY")
+# KIMI_API_KEY = _resolve_api_key("KIMI_API_KEY")
+# Kimi is currently routed via Poe, so keep the old key optional.
+KIMI_API_KEY = (LOCAL_API_KEYS.get("KIMI_API_KEY") or os.getenv("KIMI_API_KEY", "").strip())
 POE_API_KEY = _resolve_api_key("POE_API_KEY")
 
 
@@ -68,9 +70,13 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     ),
     "kimi": ModelConfig(
         key="kimi",
-        model="kimi-k2-thinking",
-        api_key=KIMI_API_KEY,
-        base_url="https://api.moonshot.ai/v1",
+        # Original direct Kimi(Moonshot) call, kept for reference:
+        # model="kimi-k2-thinking",
+        # api_key=KIMI_API_KEY,
+        # base_url="https://api.moonshot.ai/v1",
+        model="kimi-k2.5",
+        api_key=POE_API_KEY,
+        base_url=POE_BASE_URL,
     ),
     # Poe models (fixed model names).
     "gpt": ModelConfig(
