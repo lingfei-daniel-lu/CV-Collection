@@ -10,10 +10,10 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cv_collection.common_functions import docx_to_text
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER
 from cv_collection.llm_client import get_model_client
 from cv_collection.staged_extraction import extract_cv_staged
+from cv_collection.docx_io import docx_to_text
 
 # Limit how many CVs are sent to each model (default: 2).
 SAMPLE_LIMIT = int(os.getenv("CV_SMOKE_LIMIT", "1"))

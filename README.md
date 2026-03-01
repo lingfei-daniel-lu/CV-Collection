@@ -125,8 +125,9 @@ Notes:
 
 ### `scripts/smoke_test_extract.py`
 
-- Small-sample integration test (default `2` CVs per model)
+- Small-sample integration test (default `1` CV per model)
 - Uses staged pipeline
+- Uses the first `N` sorted `.docx` files under `input/`
 - Configure sample size with `CV_SMOKE_LIMIT`
 
 ### `scripts/clean_cache.py`
@@ -137,14 +138,17 @@ Notes:
 ### `scripts/compare_model_outputs.py`
 
 - Compares same-date model outputs field-by-field
+- Excludes model-level missing rows from field diff/missing summary counts
+- Records row coverage gaps in `present_models` and `missing_models`
 - Generates:
   - `compare_<date>_diffs.csv`
   - `compare_<date>_summary.csv`
 
 ### `scripts/aggregate_model_outputs.py`
 
-- Aggregates same-date model outputs by field-level majority voting
-- Marks unresolved fields and rows needing review
+- Aggregates same-date model outputs by field-level voting
+- Accepts a field value only when at least 3 models provide non-empty votes and one value wins more than half of those non-empty votes
+- Marks unresolved fields as `all_missing`, `tie`, or `insufficient_support`, and flags rows needing review
 
 ### `scripts/list_pending_docs.py`
 
@@ -163,11 +167,17 @@ Notes:
 - Safe verification context construction (no risky truncation)
 - Step-level LLM response cache
 
-### `cv_collection/common_functions.py`
+### `cv_collection/docx_io.py`
 
 - `.docx` text extraction (paragraphs + tables, preserving document order where possible)
+
+### `cv_collection/json_parsing.py`
+
 - JSON cleanup/parsing for LLM responses
-- Shared CSV writer
+
+### `cv_collection/csv_export.py`
+
+- Shared CSV writer for extraction outputs
 
 ### `cv_collection/llm_client.py`
 
@@ -197,8 +207,10 @@ CV-Collection/
 │   └── list_pending_docs.py
 ├── cv_collection/
 │   ├── config.py
+│   ├── docx_io.py
+│   ├── json_parsing.py
+│   ├── csv_export.py
 │   ├── llm_client.py
-│   ├── common_functions.py
 │   ├── staged_extraction.py
 │   ├── journal_taxonomy.py
 │   ├── prompt_rules.py
@@ -232,8 +244,9 @@ python3 -m pip install pandas tqdm python-docx openai
 - Copy `local_api_keys.example.py` to `local_api_keys.py`
 - Fill required keys:
   - `DEEPSEEK_API_KEY`
-  - `KIMI_API_KEY`
   - `POE_API_KEY`
+- Optional:
+  - `KIMI_API_KEY` (only needed if Kimi is switched back to direct Moonshot access)
 - Resolution order in `cv_collection/llm_client.py`:
   1. `local_api_keys.py`
   2. environment variables
@@ -246,10 +259,10 @@ python3 -m pip install pandas tqdm python-docx openai
 python3 -m scripts.smoke_test_extract
 ```
 
-Optional (faster):
+Optional (slightly larger sample):
 
 ```bash
-CV_SMOKE_LIMIT=1 python3 -m scripts.smoke_test_extract
+CV_SMOKE_LIMIT=2 python3 -m scripts.smoke_test_extract
 ```
 
 ### Full Extraction
@@ -270,17 +283,34 @@ CV_CONCURRENCY=6 python3 -m scripts.extract_cvs
 python3 -m scripts.compare_model_outputs --input-dir output --output-dir output/compare
 ```
 
+`compare_<date>_diffs.csv` includes `present_models` and `missing_models` so row coverage gaps are visible without inflating field-level summary counts.
+
+In `compare_<date>_summary.csv`, `total_files` means the number of files that were present in at least two model outputs and therefore actually comparable at the field level.
+
 ### Aggregate Model Outputs
 
 ```bash
 python3 -m scripts.aggregate_model_outputs --date 2026-02-18 --input-dir output --output-dir output/aggregate
 ```
 
+Aggregation uses non-empty votes only. A field is accepted when at least 3 models return non-empty values and the winning value gets more than half of those non-empty votes. Otherwise the field is left blank and marked for review.
+
+Latest checked aggregate result:
+
+- Source date: `2026-03-01`
+- Output file: `output/aggregate/aggregate_2026-03-01.csv`
+- Total rows: `781`
+- Fully resolved rows (`needs_review = 0`): `611`
+- Rows needing review (`needs_review = 1`): `170`
+- Unresolved reason counts are field-level counts, not row counts: `insufficient_support = 178`, `all_missing = 115`, `tie = 80`
+
+This is a checked snapshot for collaborator review. If you rerun aggregation for a new date or with different model outputs, update these summary numbers.
+
 If `--date` is omitted in compare/aggregate scripts, they process today's outputs by default.
 
 ## Pre-Run Checklist (Before a New Full Extraction)
 
-1. Confirm dependencies are installed (`python-docx`, `openai` are required).
+1. Confirm dependencies are installed (`python-docx`, `openai`, `pandas`, and `tqdm` are required for the full pipeline).
 2. Confirm API keys are configured (`local_api_keys.py` or environment variables).
 3. Decide whether to clean caches:
    - `python3 -m scripts.clean_cache`

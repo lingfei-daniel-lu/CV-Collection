@@ -19,7 +19,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from cv_collection.common_functions import safe_json_load
 from cv_collection.config import OUTPUT_FOLDER
 from cv_collection.journal_taxonomy import JOURNALS
 from cv_collection.staged_prompts import (
@@ -28,6 +27,7 @@ from cv_collection.staged_prompts import (
     build_targeted_retry_prompt,
     build_verification_prompt,
 )
+from cv_collection.json_parsing import safe_json_load
 
 
 CONFIDENCE_THRESHOLD = 0.8

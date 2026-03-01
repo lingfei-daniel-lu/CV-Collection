@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
 import os
 import sys
@@ -10,15 +11,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pandas as pd
-
 from cv_collection.config import AGGREGATE_OUTPUT_FOLDER, DEFAULT_MODEL_KEYS, OUTPUT_FOLDER
 from cv_collection.output_utils import (
-    detect_field_type,
     is_missing,
+    load_model_output_context,
     normalize_value,
     parse_output_files,
-    read_output_rows,
 )
 
 def choose_output_value(raw_values: list[str]) -> str:
@@ -27,24 +25,10 @@ def choose_output_value(raw_values: list[str]) -> str:
 
 
 def aggregate_date(date: str, model_paths: dict[str, str], models: list[str], output_dir: str, output_file: str | None):
-    model_rows = {}
-    all_fields = set()
-    for model in models:
-        rows, fieldnames = read_output_rows(model_paths[model])
-        model_rows[model] = rows
-        all_fields.update(fieldnames)
-
-    all_fields.discard("file")
-    all_fields = sorted(all_fields)
-    all_files = sorted({f for rows in model_rows.values() for f in rows.keys()})
-
-    field_types = {}
-    for field in all_fields:
-        values = []
-        for model in models:
-            for row in model_rows[model].values():
-                values.append(row.get(field, ""))
-        field_types[field] = detect_field_type(values)
+    min_non_missing_votes = 3
+    models, model_rows, all_fields, all_files, field_types = load_model_output_context(
+        [(model, model_paths[model]) for model in models]
+    )
 
     final_rows = []
     for file_key in all_files:
@@ -67,11 +51,21 @@ def aggregate_date(date: str, model_paths: dict[str, str], models: list[str], ou
                 unresolved[field] = "all_missing"
                 continue
 
+            non_missing_votes = sum(len(v) for v in votes.values())
+            if non_missing_votes < min_non_missing_votes:
+                out[field] = ""
+                unresolved[field] = "insufficient_support"
+                continue
+
             max_count = max(len(v) for v in votes.values())
             winners = [k for k, v in votes.items() if len(v) == max_count]
             if len(winners) != 1:
                 out[field] = ""
                 unresolved[field] = "tie"
+                continue
+            if max_count <= non_missing_votes / 2:
+                out[field] = ""
+                unresolved[field] = "insufficient_support"
                 continue
 
             winner_norm = winners[0]
@@ -87,16 +81,13 @@ def aggregate_date(date: str, model_paths: dict[str, str], models: list[str], ou
     out_path = os.path.join(output_dir, out_name)
     meta_cols = ["unresolved_count", "unresolved_fields", "unresolved_details", "needs_review"]
     ordered_cols = ["file"] + all_fields + meta_cols
-    df_out = pd.DataFrame(final_rows)
-    if df_out.empty:
-        df_out = pd.DataFrame(columns=ordered_cols)
-    else:
-        for col in ordered_cols:
-            if col not in df_out.columns:
-                df_out[col] = ""
-        df_out = df_out[ordered_cols]
-    df_out.to_csv(out_path, index=False, encoding="utf-8-sig")
-    return out_path, len(df_out), int((df_out["needs_review"] == 1).sum()) if not df_out.empty else 0
+    with open(out_path, "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=ordered_cols)
+        writer.writeheader()
+        for row in final_rows:
+            writer.writerow({col: row.get(col, "") for col in ordered_cols})
+    review_rows = sum(1 for row in final_rows if row.get("needs_review") == 1)
+    return out_path, len(final_rows), review_rows
 
 
 def main():
@@ -120,7 +111,7 @@ def main():
     parser.add_argument(
         "--models",
         default=",".join(DEFAULT_MODEL_KEYS),
-        help="Comma-separated model keys to aggregate (default: deepseek,kimi,gpt,claude,gemini).",
+        help=f"Comma-separated model keys to aggregate (default: {','.join(DEFAULT_MODEL_KEYS)}).",
     )
     parser.add_argument(
         "--output-file",

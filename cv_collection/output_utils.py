@@ -52,6 +52,45 @@ def read_output_rows(path: str) -> tuple[dict[str, dict[str, str]], list[str]]:
     return rows, fieldnames
 
 
+def load_model_output_context(
+    model_paths: list[tuple[str, str]],
+) -> tuple[
+    list[str],
+    dict[str, dict[str, dict[str, str]]],
+    list[str],
+    list[str],
+    dict[str, str],
+]:
+    """
+    Load model output CSVs and derive the shared comparison/aggregation context.
+    Returns ordered model keys, row mappings, ordered fields, ordered files, and
+    inferred field types.
+    """
+    model_rows: dict[str, dict[str, dict[str, str]]] = {}
+    all_fields = set()
+    models: list[str] = []
+
+    for model, path in model_paths:
+        rows, fieldnames = read_output_rows(path)
+        models.append(model)
+        model_rows[model] = rows
+        all_fields.update(fieldnames)
+
+    all_fields.discard("file")
+    ordered_fields = sorted(all_fields)
+    all_files = sorted({file_key for rows in model_rows.values() for file_key in rows.keys()})
+
+    field_types = {}
+    for field in ordered_fields:
+        values = []
+        for model in models:
+            for row in model_rows[model].values():
+                values.append(row.get(field, ""))
+        field_types[field] = detect_field_type(values)
+
+    return models, model_rows, ordered_fields, all_files, field_types
+
+
 def is_missing(value) -> bool:
     if value is None:
         return True
