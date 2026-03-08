@@ -84,6 +84,29 @@ _NEW_ENTRY = re.compile(
     r")"
 )
 
+_INLINE_PUB_HEADER = re.compile(
+    r"(?i)^(?:"
+    r"publications?(?:\s+(?:and|&)\s+\w+)*|"
+    r"refereed\s+(?:journal\s+)?publications?|"
+    r"selected\s+publications?|"
+    r"published\s+papers?|"
+    r"journal\s+articles?|"
+    r"research\s+papers?|"
+    r"peer[- ]reviewed\s+(?:journal\s+)?(?:publications?|articles?)|"
+    r"working\s+papers?|"
+    r"(?:papers?\s+)?under\s+review(?:\s+and\s+working\s+papers?)?|"
+    r"in\s+progress"
+    r")(?:\s+(?:and|&)\s+\w+)*"
+    r"\s*[:.]?\s+"
+)
+
+
+def _strip_inline_header(line: str) -> str:
+    match = _INLINE_PUB_HEADER.match(line)
+    if match:
+        return line[match.end() :]
+    return line
+
 FIELD_HINTS: dict[str, str] = {
     "name": "The full name of the CV owner. Usually at the very top of the document.",
     "promotion_year": (
@@ -153,6 +176,15 @@ def split_publications(pub_text: str) -> list[str]:
             if current:
                 entries.append(" ".join(current))
                 current = []
+            continue
+
+        cleaned = _strip_inline_header(stripped)
+        if cleaned != stripped:
+            if current:
+                entries.append(" ".join(current))
+                current = []
+            if cleaned:
+                current = [cleaned]
             continue
 
         if _NEW_ENTRY.match(stripped) and current:
@@ -410,14 +442,12 @@ def _should_run_verification(
     if "employment" not in sections or "publications" not in sections:
         return True
 
-    # Publication/working-paper separation is a common confusion source when target-journal hits exist.
-    has_working_papers = bool(sections.get("working_papers", "").strip())
-    if has_working_papers:
-        journal_years = merged.get("journal_years", {})
-        if isinstance(journal_years, dict) and any(
-            isinstance(v, list) and len(v) > 0 for v in journal_years.values()
-        ):
-            return True
+    # Broaden the gate without full verification: verify whenever we extracted any target-journal hits.
+    journal_years = merged.get("journal_years", {})
+    if isinstance(journal_years, dict) and any(
+        isinstance(v, list) and len(v) > 0 for v in journal_years.values()
+    ):
+        return True
 
     return False
 

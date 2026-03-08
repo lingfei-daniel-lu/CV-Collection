@@ -35,7 +35,11 @@ def _resolve_api_key(name: str) -> str:
 
 
 LOCAL_API_KEYS = _load_local_api_keys()
-DEEPSEEK_API_KEY = _resolve_api_key("DEEPSEEK_API_KEY")
+# DEEPSEEK_API_KEY = _resolve_api_key("DEEPSEEK_API_KEY")
+# DeepSeek is currently routed via Poe, so keep the old key optional.
+DEEPSEEK_API_KEY = (
+    LOCAL_API_KEYS.get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "").strip()
+)
 # KIMI_API_KEY = _resolve_api_key("KIMI_API_KEY")
 # Kimi is currently routed via Poe, so keep the old key optional.
 KIMI_API_KEY = (LOCAL_API_KEYS.get("KIMI_API_KEY") or os.getenv("KIMI_API_KEY", "").strip())
@@ -63,10 +67,13 @@ class ModelConfig:
 MODEL_CONFIGS: dict[str, ModelConfig] = {
     "deepseek": ModelConfig(
         key="deepseek",
-        # model="deepseek-chat",
-        model="deepseek-reasoner",
-        api_key=DEEPSEEK_API_KEY,
-        base_url="https://api.deepseek.com",
+        # Original direct DeepSeek call, kept for reference:
+        # model="deepseek-reasoner",
+        # api_key=DEEPSEEK_API_KEY,
+        # base_url="https://api.deepseek.com",
+        model="deepseek-v3.2",
+        api_key=POE_API_KEY,
+        base_url=POE_BASE_URL,
     ),
     "kimi": ModelConfig(
         key="kimi",

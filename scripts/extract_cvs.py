@@ -28,6 +28,8 @@ EXPORT_DATE = date.today().isoformat()
 
 CONCURRENCY = int(os.getenv("CV_CONCURRENCY", "4"))
 
+JOURNAL_EXPORT_COLS = [f"{j}_count" for j in JOURNALS] + [f"{j}_year" for j in JOURNALS]
+
 # ───────────────────────────── MAIN ──────────────────────────────────── #
 
 def build_row(rel: str, data: dict) -> dict:
@@ -38,13 +40,20 @@ def build_row(rel: str, data: dict) -> dict:
         "promotion_university": data.get("promotion_university"),
         "years_post_phd": data.get("years_post_phd"),
     }
-    journals = {j: 0 for j in JOURNALS}
-    raw_journals = data.get("journals", {})
-    if not isinstance(raw_journals, dict):
-        print(f"⚠️  Invalid journals payload for {rel}; expected object, got {type(raw_journals).__name__}")
-        raw_journals = {}
-    journals.update(raw_journals)
-    row.update(journals)
+    raw_journal_years = data.get("journal_years", {})
+    if not isinstance(raw_journal_years, dict):
+        print(
+            f"⚠️  Invalid journal_years payload for {rel}; expected object, "
+            f"got {type(raw_journal_years).__name__}"
+        )
+        raw_journal_years = {}
+
+    for journal in JOURNALS:
+        years = raw_journal_years.get(journal, [])
+        if not isinstance(years, list):
+            years = []
+        row[f"{journal}_count"] = len(years)
+        row[f"{journal}_year"] = "; ".join(str(y) for y in years)
     return row
 
 
@@ -63,7 +72,7 @@ def write_model_result(rel: str, data: dict | None, out_csv: Path) -> bool:
     row = build_row(rel, data)
 
     try:
-        flush_rows_to_csv([row], out_csv, JOURNALS)
+        flush_rows_to_csv([row], out_csv, JOURNAL_EXPORT_COLS)
     except Exception as e:
         print(f"⚠️  Could not write interim CSV: {e}", file=sys.stderr)
         return False
@@ -74,13 +83,26 @@ def write_model_result(rel: str, data: dict | None, out_csv: Path) -> bool:
 def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
     client = get_model_client(model_key)
     out_csv = OUTPUT_FOLDER / f"output_{model_key}_{EXPORT_DATE}.csv"
+    expected_cols = [
+        "file",
+        "name",
+        "promotion_year",
+        "promotion_university",
+        "years_post_phd",
+        *JOURNAL_EXPORT_COLS,
+    ]
 
     processed_files: set[str] = set()
 
     if out_csv.exists():
         old = pd.read_csv(out_csv)
-        processed_files.update(old["file"].astype(str))
-        print(f"↻  Resuming {model_key} – {len(processed_files)} CVs already done.")
+        old_cols = list(old.columns)
+        if old_cols != expected_cols:
+            out_csv.unlink()
+            print(f"↻  {model_key}: schema changed, overwriting {out_csv.name}")
+        else:
+            processed_files.update(old["file"].astype(str))
+            print(f"↻  Resuming {model_key} – {len(processed_files)} CVs already done.")
 
     pending = [(rel, text) for rel, text in docs if rel not in processed_files]
     if not pending:
