@@ -1,205 +1,234 @@
 # CV-Collection
 
-Batch pipeline for parsing economics faculty CVs (`.docx`) with multiple LLMs, extracting structured fields, comparing model outputs, and aggregating results for review.
+Batch pipeline for parsing economics faculty CVs (`.docx`) with multiple LLMs, extracting structured metadata, comparing model outputs, and aggregating them for review.
 
-## Project Goals
+## What It Extracts
 
-- Read faculty CVs from `input/`
-- Extract core fields:
-  - `name`
-  - `promotion_year`
-  - `promotion_university`
-  - `years_post_phd`
-  - publication counts for 23 target economics journals
-- Run multiple models and store per-model outputs separately
-- Compare and aggregate outputs across models
+For each CV, the current pipeline writes:
 
-## Current Extraction Flow (Staged Pipeline)
+- `name`
+- `research_fields`
+- `promotion_year`
+- `promotion_university`
+- `years_post_phd`
+- `full_promotion_year`
+- `full_promotion_university`
+- `years_post_phd_full`
+- journal publication counts and matched years for the target economics journal list
 
-`scripts/extract_cvs.py` and `scripts/smoke_test_extract.py` use the staged extractor in `cv_collection/staged_extraction.py`.
+`research_fields` is intentionally conservative:
+
+- prefer explicit CV evidence over topic inference
+- use local section/fallback rules first when possible
+- normalize to standard economics field labels
+- keep primary fields only when the CV distinguishes primary vs secondary
+
+## Environment
+
+Dependencies are declared in `environment.yml`.
+
+Current environment file targets:
+
+- Python `3.13`
+- `openai`
+- `python-docx`
+- `pandas`
+- `tqdm`
+
+Create or update the conda environment as usual from `environment.yml`.
+
+## API Keys
+
+The active model configuration in `cv_collection/llm_client.py` currently routes all configured models through Poe's OpenAI-compatible API.
+
+Required:
+
+- `POE_API_KEY`
+
+Resolution order:
+
+1. `local_api_keys.py`
+2. environment variables
+
+`local_api_keys.example.py` provides the template for local-only configuration.
+
+## Current Extraction Flow
+
+The main staged pipeline lives in `cv_collection/staged_extraction.py`.
 
 High-level flow:
 
-1. `.docx` -> plain text (`paragraphs + tables`, preserving order as much as possible)
-2. Heuristic section detection (`education`, `employment`, `publications`, etc.)
-   - If the same section header appears multiple times (e.g., multiple publication blocks), matched chunks are preserved and concatenated instead of overwritten.
-3. Publication entry splitting (heuristic line grouping)
-4. Main extraction
-   - metadata extraction with confidence scores
-   - publication extraction as per-journal year lists (internal representation)
-5. Targeted metadata retry
-   - low-confidence metadata fields are retried in **one combined LLM call** (not one call per field)
-   - fields are only updated when retry confidence is higher than the original confidence
-6. Conditional verification pass (LLM)
-   - verification is **not** run for every CV
-   - triggered only when extraction appears risky (e.g., low metadata confidence, missing key sections, or publication/working-paper ambiguity)
-7. Safe verification context assembly
-   - avoids risky truncation
-   - prefers full evidence blocks that fit the limit
-   - may skip verification if no safe context fits
-8. Convert internal publication year lists back to journal counts for CSV output
+1. Read `.docx` files in document order with `cv_collection/docx_io.py`
+2. Detect local sections with `cv_collection/section_taxonomy.py`
+3. Extract local `research_fields` from:
+   - explicit `research_interests` sections
+   - cautious explicit-label fallback when no usable section is found
+4. Run metadata extraction with confidence scores
+5. Use local `research_fields` when available; do not let verification overwrite them
+6. Split publications heuristically and extract target-journal publication years
+7. Retry low-confidence metadata fields in one targeted LLM call
+8. Run verification only when extraction appears risky
+9. Write per-model CSV output
 
-Notes:
+Important current behavior:
 
-- Final CSV schema remains journal **counts** (compatible with compare/aggregate scripts).
-- Verification is intentionally conservative: it may be skipped rather than run on truncated evidence.
-- If no `publications` section is detected, verification may still correct metadata (when safe), but journal corrections are not applied.
+- repeated section headers are preserved and concatenated
+- verification is conditional, not mandatory
+- verification uses a section-aware context and may be skipped if no safe context fits
+- journal years are normalized from lists and scalar year responses
+- final CSV keeps journal counts, while internal extraction keeps matched year lists
 
-## Prompt / Rule Architecture (Current)
+## Research Field Logic
 
-Prompt logic is now split into shared rules + flow-specific prompt builders.
+Research field behavior is split cleanly across two modules:
 
-### Shared Rule / Taxonomy Modules
+- `cv_collection/research_field_taxonomy.py`
+  - canonical economics field labels
+  - alias matching
+  - normalization and noise filtering
+- `cv_collection/section_taxonomy.py`
+  - section header rules
+  - explicit-label fallback rules
+  - local research-field extraction helpers
 
-- `cv_collection/journal_taxonomy.py`
-  - Canonical `JOURNALS` list (23 journals)
-  - Journal abbreviation hint lines used by prompts
+The fallback is deliberately narrow. It is meant to improve recall on CVs with explicit labels such as `Fields of Interest:` or `Major Fields of Interest` without opening the door to publication-title noise.
+
+## Prompt Architecture
+
+Prompt content is split into:
+
 - `cv_collection/prompt_rules.py`
-  - Shared extraction rules (single source of truth)
-  - tenure/promotion rules (including `Reader`)
-  - source priority / exclusions / mid-career fallback
-  - PhD / `years_post_phd` rules
-  - institution naming rules
-  - publication counting + dedup rules
-
-### Prompt Builder Modules
-
+  - shared extraction rules
+  - promotion and institution rules
+  - research-field rules
+  - publication counting / matching rules
 - `cv_collection/staged_prompts.py`
-  - metadata prompt
+  - staged metadata prompt
   - publication prompt
-  - combined metadata retry prompt
+  - targeted retry prompt
   - verification prompt
 - `cv_collection/legacy_prompts.py`
-  - legacy single-pass prompt builder (backup / reference)
+  - legacy prompt builder kept only as reference
 
-### Compatibility Wrapper
+## Cache
 
-- `cv_collection/prompt_templates.py`
-  - kept as a compatibility layer for older imports
-  - re-exports `JOURNALS` and legacy single-pass prompt access
+The staged pipeline caches parsed JSON for each LLM step under:
 
-## Step-Level Cache
-
-The staged pipeline caches parsed JSON results for each LLM step (metadata / publications / retry / verification).
-
-- Cache location: `output/cache/staged_extraction/`
-- Cache key includes:
-  - model key / model name
-  - temperature
-  - full message payload
-  - cache version
-- Cache is transparent: a cache hit returns the previously parsed JSON for that step
-
-Disable cache temporarily:
-
-```bash
-CV_STAGE_CACHE_DISABLE=1 python3 -m scripts.smoke_test_extract
+```text
+output/cache/staged_extraction/
 ```
 
-### Cache Cleanup
+Cache keys include:
 
-Use the cleanup script to remove:
+- model key
+- model name
+- temperature
+- full message payload
+- cache version
 
-- `__pycache__` directories
-- `.pyc` files
-- `output/cache/`
+Disable cache for one run:
 
 ```bash
-python3 -m scripts.clean_cache
+CV_STAGE_CACHE_DISABLE=1 python -m scripts.smoke_test_extract
 ```
 
-Notes:
+Clean cache and Python bytecode:
 
-- Cache files are disposable / reproducible.
-- `output/cache/` should be ignored by git (already in `.gitignore`).
+```bash
+python -m scripts.clean_cache
+```
 
-## Core Scripts
-
-### `scripts/extract_cvs.py`
-
-- Main batch extraction pipeline
-- Uses staged extraction (`cv_collection/staged_extraction.py`)
-- Supports concurrency via `CV_CONCURRENCY` (default `4`)
-- Resume mode: skips files already present in same-day output CSV
-- Writes rows incrementally to reduce interruption risk
+## Main Scripts
 
 ### `scripts/smoke_test_extract.py`
 
-- Small-sample integration test (default `1` CV per model)
-- Uses staged pipeline
-- Uses the first `N` sorted `.docx` files under `input/`
-- Configure sample size with `CV_SMOKE_LIMIT`
+Small-sample integration test.
 
-### `scripts/clean_cache.py`
+- default sample size: `1`
+- uses the first sorted `.docx` files under `input/`
+- prints both final `research_fields` and `local_research_fields` for debugging
 
-- Removes Python cache artifacts (`__pycache__`, `.pyc`)
-- Removes project output cache (`output/cache/`)
+Example:
+
+```bash
+python -m scripts.smoke_test_extract
+CV_SMOKE_LIMIT=2 python -m scripts.smoke_test_extract
+```
+
+### `scripts/extract_cvs.py`
+
+Main multi-model batch extractor.
+
+- resumes from same-day per-model CSVs when schema matches
+- writes rows incrementally
+- supports `CV_CONCURRENCY`
+
+Example:
+
+```bash
+python -m scripts.extract_cvs
+CV_CONCURRENCY=6 python -m scripts.extract_cvs
+```
+
+### `scripts/extract_cvs_gemini.py`
+
+Gemini-only entrypoint that reuses the same batch logic.
+
+Example:
+
+```bash
+python -m scripts.extract_cvs_gemini
+```
 
 ### `scripts/compare_model_outputs.py`
 
-- Compares same-date model outputs field-by-field
-- Excludes model-level missing rows from field diff/missing summary counts
-- Records row coverage gaps in `present_models` and `missing_models`
-- Generates:
-  - `compare_<date>_diffs.csv`
-  - `compare_<date>_summary.csv`
+Compares same-date model outputs field by field.
+
+Outputs:
+
+- `output/compare/compare_<date>_diffs.csv`
+- `output/compare/compare_<date>_summary.csv`
+
+Example:
+
+```bash
+python -m scripts.compare_model_outputs --input-dir output --output-dir output/compare
+```
 
 ### `scripts/aggregate_model_outputs.py`
 
-- Aggregates same-date model outputs by field-level voting
-- Accepts a field value only when at least 3 models provide non-empty votes and one value wins more than half of those non-empty votes
-- Marks unresolved fields as `all_missing`, `tie`, or `insufficient_support`, and flags rows needing review
+Aggregates same-date model outputs by field-level voting.
+
+Current rule:
+
+- at least 3 non-empty votes
+- one value must win strictly more than half of non-empty votes
+- otherwise the field stays blank and is marked unresolved
+
+Example:
+
+```bash
+python -m scripts.aggregate_model_outputs --date 2026-03-01 --input-dir output --output-dir output/aggregate
+```
 
 ### `scripts/list_pending_docs.py`
 
-- Helper script to inspect pending/remaining CVs (if used in your workflow)
+Helper for identifying remaining legacy `.doc` files that still need conversion.
 
-## Core Modules
-
-### `cv_collection/staged_extraction.py`
-
-- Section detection
-- Duplicate section preservation (same-name sections are concatenated)
-- Publication entry splitting
-- Metadata extraction with confidence scores
-- Combined targeted retry for low-confidence metadata fields
-- Conditional verification trigger
-- Safe verification context construction (no risky truncation)
-- Step-level LLM response cache
-
-### `cv_collection/docx_io.py`
-
-- `.docx` text extraction (paragraphs + tables, preserving document order where possible)
-
-### `cv_collection/json_parsing.py`
-
-- JSON cleanup/parsing for LLM responses
-
-### `cv_collection/csv_export.py`
-
-- Shared CSV writer for extraction outputs
-
-### `cv_collection/llm_client.py`
-
-- Unified OpenAI-compatible API wrapper across providers
-- Exponential backoff retry
-- Supports:
-  - prompt + text calls (`chat_completion`, legacy-compatible wrapper)
-  - multi-message calls (`chat_messages`, used by staged pipeline)
-
-## Project Structure (Core)
+## Repository Layout
 
 ```text
 CV-Collection/
-├── input/                              # Raw CV files (organized by school/rank)
+├── input/
 ├── output/
-│   ├── output_<model>_<date>.csv       # Per-model extraction outputs (journal counts)
-│   ├── cache/                          # Step-level cache (gitignored)
+│   ├── output_<model>_<date>.csv
+│   ├── cache/
 │   │   └── staged_extraction/
-│   ├── compare/                        # Cross-model comparison outputs
-│   └── aggregate/                      # Majority-vote aggregation outputs
+│   ├── compare/
+│   └── aggregate/
 ├── scripts/
 │   ├── extract_cvs.py
+│   ├── extract_cvs_gemini.py
 │   ├── smoke_test_extract.py
 │   ├── clean_cache.py
 │   ├── compare_model_outputs.py
@@ -207,122 +236,27 @@ CV-Collection/
 │   └── list_pending_docs.py
 ├── cv_collection/
 │   ├── config.py
-│   ├── docx_io.py
-│   ├── json_parsing.py
 │   ├── csv_export.py
-│   ├── llm_client.py
-│   ├── staged_extraction.py
+│   ├── docx_io.py
 │   ├── journal_taxonomy.py
+│   ├── json_parsing.py
+│   ├── llm_client.py
+│   ├── output_utils.py
 │   ├── prompt_rules.py
-│   ├── staged_prompts.py
 │   ├── legacy_prompts.py
-│   ├── prompt_templates.py             # Compatibility wrapper (legacy imports)
-│   └── output_utils.py
-├── local_api_keys.example.py           # API key template for collaborators
-└── local_api_keys.py                   # Local private keys (gitignored)
+│   ├── staged_prompts.py
+│   ├── research_field_taxonomy.py
+│   ├── section_taxonomy.py
+│   └── staged_extraction.py
+├── environment.yml
+├── local_api_keys.example.py
+└── local_api_keys.py
 ```
 
-## Requirements
+## Practical Notes
 
-- Python 3.10+
-- Main dependencies:
-  - `pandas`
-  - `tqdm`
-  - `python-docx`
-  - `openai`
-- Input requirement: `.docx` only (convert legacy `.doc` manually)
-
-Install missing dependencies (example):
-
-```bash
-python3 -m pip install pandas tqdm python-docx openai
-```
-
-## API Keys (Collaborators)
-
-- `local_api_keys.py` is local-only and gitignored
-- Copy `local_api_keys.example.py` to `local_api_keys.py`
-- Fill required keys:
-  - `DEEPSEEK_API_KEY`
-  - `POE_API_KEY`
-- Optional:
-  - `KIMI_API_KEY` (only needed if Kimi is switched back to direct Moonshot access)
-- Resolution order in `cv_collection/llm_client.py`:
-  1. `local_api_keys.py`
-  2. environment variables
-
-## How to Run
-
-### Smoke Test (Recommended First)
-
-```bash
-python3 -m scripts.smoke_test_extract
-```
-
-Optional (slightly larger sample):
-
-```bash
-CV_SMOKE_LIMIT=2 python3 -m scripts.smoke_test_extract
-```
-
-### Full Extraction
-
-```bash
-python3 -m scripts.extract_cvs
-```
-
-Optional concurrency:
-
-```bash
-CV_CONCURRENCY=6 python3 -m scripts.extract_cvs
-```
-
-### Compare Model Outputs
-
-```bash
-python3 -m scripts.compare_model_outputs --input-dir output --output-dir output/compare
-```
-
-`compare_<date>_diffs.csv` includes `present_models` and `missing_models` so row coverage gaps are visible without inflating field-level summary counts.
-
-In `compare_<date>_summary.csv`, `total_files` means the number of files that were present in at least two model outputs and therefore actually comparable at the field level.
-
-### Aggregate Model Outputs
-
-```bash
-python3 -m scripts.aggregate_model_outputs --date 2026-02-18 --input-dir output --output-dir output/aggregate
-```
-
-Aggregation uses non-empty votes only. A field is accepted when at least 3 models return non-empty values and the winning value gets more than half of those non-empty votes. Otherwise the field is left blank and marked for review.
-
-Latest checked aggregate result:
-
-- Source date: `2026-03-01`
-- Output file: `output/aggregate/aggregate_2026-03-01.csv`
-- Total rows: `781`
-- Fully resolved rows (`needs_review = 0`): `611`
-- Rows needing review (`needs_review = 1`): `170`
-- Unresolved reason counts are field-level counts, not row counts: `insufficient_support = 178`, `all_missing = 115`, `tie = 80`
-
-This is a checked snapshot for collaborator review. If you rerun aggregation for a new date or with different model outputs, update these summary numbers.
-
-If `--date` is omitted in compare/aggregate scripts, they process today's outputs by default.
-
-## Pre-Run Checklist (Before a New Full Extraction)
-
-1. Confirm dependencies are installed (`python-docx`, `openai`, `pandas`, and `tqdm` are required for the full pipeline).
-2. Confirm API keys are configured (`local_api_keys.py` or environment variables).
-3. Decide whether to clean caches:
-   - `python3 -m scripts.clean_cache`
-4. Decide whether to fully rerun today's outputs:
-   - `scripts/extract_cvs.py` resumes from same-day output CSVs
-   - delete same-day `output/output_<model>_<date>.csv` files if you want a clean rerun
-5. Run a smoke test (`scripts/smoke_test_extract.py`) before the full batch.
-6. Adjust `CV_CONCURRENCY` if your provider rate limits or errors increase.
-
-## Notes / Known Constraints
-
-- `.doc` files are not parsed directly.
-- Section detection and publication splitting are heuristic (not guaranteed on every CV format).
-- Verification is conditional and may be skipped when no safe context fits within the limit.
-- Cache significantly helps repeated runs, interrupted resumes, and prompt/threshold tuning cycles.
+- Input format is `.docx` only. Legacy `.doc` files should be converted first.
+- Section detection and publication splitting are heuristic by design.
+- `research_fields` is restricted to explicit, economics-style field labels, not inferred publication topics.
+- Smoke testing is the fastest way to validate prompt or taxonomy changes before a larger rerun.
+- If you want a clean rerun for today's date, remove the corresponding `output/output_<model>_<date>.csv` files first; otherwise batch extraction resumes.

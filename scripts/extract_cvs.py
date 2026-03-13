@@ -18,7 +18,8 @@ from tqdm import tqdm
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER, OUTPUT_FOLDER
 from cv_collection.journal_taxonomy import JOURNALS
 from cv_collection.llm_client import get_model_client
-from cv_collection.staged_extraction import extract_cv_staged
+from cv_collection.research_field_taxonomy import normalize_research_fields
+from cv_collection.staged_extraction import extract_cv_staged, infer_rank_from_label
 from cv_collection.csv_export import flush_rows_to_csv
 from cv_collection.docx_io import docx_to_text
 
@@ -35,10 +36,15 @@ JOURNAL_EXPORT_COLS = [f"{j}_count" for j in JOURNALS] + [f"{j}_year" for j in J
 def build_row(rel: str, data: dict) -> dict:
     row = {
         "file": rel,
+        "rank": data.get("rank") or infer_rank_from_label(rel),
         "name": data.get("name"),
+        "research_fields": normalize_research_fields(data.get("research_fields", "")),
         "promotion_year": data.get("promotion_year"),
+        "full_promotion_year": data.get("full_promotion_year"),
+        "full_promotion_university": data.get("full_promotion_university"),
         "promotion_university": data.get("promotion_university"),
         "years_post_phd": data.get("years_post_phd"),
+        "years_post_phd_full": data.get("years_post_phd_full"),
     }
     raw_journal_years = data.get("journal_years", {})
     if not isinstance(raw_journal_years, dict):
@@ -58,8 +64,9 @@ def build_row(rel: str, data: dict) -> dict:
 
 
 def fetch_model_response(client, model_key: str, rel: str, cv_text: str) -> dict | None:
+    rank = infer_rank_from_label(rel)
     try:
-        return extract_cv_staged(client, cv_text, rel)
+        return extract_cv_staged(client, cv_text, rel, rank=rank)
     except Exception as e:
         print(f"⚠️  {model_key} failed on {rel}: {e}")
         return None
@@ -85,10 +92,15 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
     out_csv = OUTPUT_FOLDER / f"output_{model_key}_{EXPORT_DATE}.csv"
     expected_cols = [
         "file",
+        "rank",
         "name",
+        "research_fields",
         "promotion_year",
+        "full_promotion_year",
+        "full_promotion_university",
         "promotion_university",
         "years_post_phd",
+        "years_post_phd_full",
         *JOURNAL_EXPORT_COLS,
     ]
 
@@ -133,8 +145,7 @@ def process_model(model_key: str, docs: list[tuple[str, str]]) -> None:
     print(f"\n✅  {model_key} finished. Consolidated table written to {out_csv}")
 
 
-def main() -> None:
-    OUTPUT_FOLDER.mkdir(exist_ok=True)
+def load_docs() -> list[tuple[str, str]]:
     docx_paths = sorted(INPUT_ROOT_FOLDER.rglob("*.docx"))
     if not docx_paths:
         sys.exit(f"No .docx files found under {INPUT_ROOT_FOLDER.resolve()}")
@@ -145,8 +156,16 @@ def main() -> None:
         if txt is None:
             continue
         docs.append((str(path.relative_to(INPUT_ROOT_FOLDER)), txt))
+
     if not docs:
         sys.exit("No readable CVs to process.")
+
+    return docs
+
+
+def main() -> None:
+    OUTPUT_FOLDER.mkdir(exist_ok=True)
+    docs = load_docs()
 
     for model_key in DEFAULT_MODEL_KEYS:
         process_model(model_key, docs)

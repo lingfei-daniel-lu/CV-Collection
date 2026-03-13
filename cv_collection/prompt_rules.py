@@ -27,6 +27,20 @@ CONSERVATIVE_EXTRACTION_RULES = """\
 """
 
 
+RESEARCH_FIELDS_RULES = """\
+RESEARCH FIELDS RULES
+- Extract only fields/interests explicitly listed in sections like "Research Interests",
+  "Research Fields", "Fields of Interest", "Areas of Specialization", or close variants.
+- If the CV distinguishes "Primary" and "Secondary" fields, return ONLY the Primary fields.
+- If no primary/secondary split is shown, return all explicitly listed research fields.
+- Return research fields as a semicolon-separated string of short field labels only.
+- If no explicit research-fields section exists, return an empty string.
+- Do NOT infer research fields from publication topics.
+- Do NOT include sentences, employment history, awards, affiliations, editorial roles, journal
+  names, or other non-field text in `research_fields`.
+"""
+
+
 TENURE_PROMOTION_RULES = """\
 TENURE / PROMOTION RULES
 - Promotion refers to the FIRST tenure-track promotion to Associate Professor or Reader.
@@ -61,12 +75,33 @@ TENURE / PROMOTION RULES
 """
 
 
+FULL_PROFESSOR_PROMOTION_RULES = """\
+FULL PROFESSOR PROMOTION RULES
+- `full_promotion_year` refers to the FIRST year the CV shows promotion/appointment to
+  Full Professor (or Professor).
+- `full_promotion_university` is the institution for that Full Professor appointment and may
+  differ from the tenure-promotion university.
+- Use the employment/appointments/positions section as the primary evidence source.
+- Exclude titles containing Assistant, Associate, Adjunct, Visiting, Clinical, Research,
+  Teaching, Professor of Practice, Practice Professor, Instructional Professor, Lecturer,
+  Instructor, Emeritus, Honorary, Affiliate, Courtesy, Guest, Acting, Interim, or non-tenure
+  variants unless the same line explicitly shows a tenure-line Full Professor appointment.
+- If only a range is shown (e.g., 2018-present Professor), use the start year of that range.
+- If no explicit Full Professor appointment appears, return null.
+"""
+
+
 PHD_AND_YEARS_POST_PHD_RULES = """\
 PHD / YEARS-POST-PHD RULES
 - Only accept a PhD year that is explicitly completed / received / earned.
 - Treat "expected", "in progress", or incomplete degrees as missing.
 - If multiple PhDs are listed, prefer Economics; otherwise use the earliest completed PhD year.
 - years_post_phd = promotion_year - PhD completion year.
+- `promotion_year` here means the tenure-track Associate/Reader promotion year (not
+  `full_promotion_year`).
+- For full-professor CVs, `years_post_phd_full = full_promotion_year - PhD completion year`.
+- If either year is missing, `years_post_phd_full` must be null.
+- If full_promotion_year < PhD year, `years_post_phd_full` must be null.
 - If either year is missing, years_post_phd must be null.
 - If promotion_year < PhD year, years_post_phd must be null.
 """

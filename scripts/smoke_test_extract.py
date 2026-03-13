@@ -12,7 +12,9 @@ if __package__ in (None, ""):
 
 from cv_collection.config import DEFAULT_MODEL_KEYS, INPUT_ROOT_FOLDER
 from cv_collection.llm_client import get_model_client
-from cv_collection.staged_extraction import extract_cv_staged
+from cv_collection.research_field_taxonomy import normalize_research_fields
+from cv_collection.section_taxonomy import detect_sections, extract_local_research_fields
+from cv_collection.staged_extraction import extract_cv_staged, infer_rank_from_label
 from cv_collection.docx_io import docx_to_text
 
 # Limit how many CVs are sent to each model (default: 2).
@@ -28,21 +30,34 @@ def smoke_model(model_key: str, docx_paths) -> None:
         if cv_text is None:
             print(f"⚠️  Skipping unreadable file: {rel}")
             continue
+        rank = infer_rank_from_label(rel)
 
         print(f"\n── {model_key}: {rel} ──")
         try:
-            data = extract_cv_staged(client, cv_text, rel)
+            data = extract_cv_staged(client, cv_text, rel, rank=rank)
         except Exception as e:
             print(f"⚠️  API call failed for {rel}: {e}")
             continue
 
+        local_sections = detect_sections(cv_text)
+        local_research_fields = normalize_research_fields(
+            extract_local_research_fields(cv_text, local_sections)
+        )
+
         # Print a concise summary so we can quickly validate the model output.
         summary = {
+            "rank": data.get("rank"),
             "name": data.get("name"),
+            "research_fields": normalize_research_fields(data.get("research_fields", "")),
+            "local_research_fields": local_research_fields,
             "promotion_year": data.get("promotion_year"),
+            "full_promotion_year": data.get("full_promotion_year"),
+            "full_promotion_university": data.get("full_promotion_university"),
             "promotion_university": data.get("promotion_university"),
             "years_post_phd": data.get("years_post_phd"),
+            "years_post_phd_full": data.get("years_post_phd_full"),
             "sections_found": data.get("sections_found"),
+            "local_sections_found": [key for key in local_sections if key != "full_text"],
         }
         print(json.dumps(summary, indent=2))
 

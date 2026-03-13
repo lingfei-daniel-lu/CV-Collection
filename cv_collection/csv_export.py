@@ -16,10 +16,15 @@ def flush_rows_to_csv(rows: list[dict], out_csv: Path, journals: Iterable[str]) 
     df = pd.DataFrame(rows)
     first_cols = [
         "file",
+        "rank",
         "name",
+        "research_fields",
         "promotion_year",
+        "full_promotion_year",
+        "full_promotion_university",
         "promotion_university",
         "years_post_phd",
+        "years_post_phd_full",
     ]
     journal_cols = list(journals)
     if not df.empty:

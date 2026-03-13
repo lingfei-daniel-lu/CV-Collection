@@ -21,59 +21,26 @@ from typing import Any
 
 from cv_collection.config import OUTPUT_FOLDER
 from cv_collection.journal_taxonomy import JOURNALS
+from cv_collection.research_field_taxonomy import normalize_research_fields
+from cv_collection.section_taxonomy import (
+    SECTION_PATTERNS,
+    detect_sections,
+    extract_local_research_fields,
+)
 from cv_collection.staged_prompts import (
     build_metadata_prompt,
     build_publication_prompt,
     build_targeted_retry_prompt,
     build_verification_prompt,
+    metadata_fields_for_rank,
 )
 from cv_collection.json_parsing import safe_json_load
 
 
 CONFIDENCE_THRESHOLD = 0.8
 MAX_VERIFY_CHARS = 15000
-CONF_FIELDS = ["name", "promotion_year", "promotion_university", "years_post_phd"]
-STAGED_CACHE_VERSION = "v1"
+STAGED_CACHE_VERSION = "v2"
 CACHE_ROOT = OUTPUT_FOLDER / "cache" / "staged_extraction"
-
-
-SECTION_PATTERNS: dict[str, re.Pattern[str]] = {
-    "education": re.compile(
-        r"(?i)^[#*\-_\s]*(?:education|academic\s+qualifications?|degrees?)\s*:?\s*$"
-    ),
-    "employment": re.compile(
-        r"(?i)^[#*\-_\s]*(?:employment|academic\s+(?:positions?|appointments?)|"
-        r"professional\s+experience|positions?\s+held|work\s+experience|"
-        r"career\s+history|appointments?)\s*:?\s*$"
-    ),
-    "publications": re.compile(
-        r"(?i)^[#*\-_\s]*(?:publications?|published\s+papers?|"
-        r"journal\s+articles?|research\s+papers?|selected\s+publications?|"
-        r"refereed\s+(?:journal\s+)?publications?|"
-        r"peer[- ]reviewed\s+(?:journal\s+)?(?:publications?|articles?))\s*:?\s*$"
-    ),
-    "working_papers": re.compile(
-        r"(?i)^[#*\-_\s]*(?:working\s+papers?|work\s+in\s+progress|"
-        r"papers?\s+under\s+review|unpublished\s+manuscripts?|"
-        r"research\s+in\s+progress)\s*:?\s*$"
-    ),
-    "awards": re.compile(
-        r"(?i)^[#*\-_\s]*(?:awards?(?:\s+(?:and|&)\s+(?:honors?|honours?))?|"
-        r"honors?|honours?|prizes?|fellowships?)\s*:?\s*$"
-    ),
-    "teaching": re.compile(
-        r"(?i)^[#*\-_\s]*(?:teaching(?:\s+experience)?|courses?\s+taught)\s*:?\s*$"
-    ),
-    "grants": re.compile(
-        r"(?i)^[#*\-_\s]*(?:grants?(?:\s+(?:and|&)\s+funding)?|"
-        r"research\s+funding|external\s+funding)\s*:?\s*$"
-    ),
-    "service": re.compile(
-        r"(?i)^[#*\-_\s]*(?:(?:professional\s+)?service|"
-        r"professional\s+activities|editorial|refereeing)\s*:?\s*$"
-    ),
-    "references": re.compile(r"(?i)^[#*\-_\s]*(?:references?|referees?)\s*:?\s*$"),
-}
 
 
 _NEW_ENTRY = re.compile(
@@ -107,49 +74,86 @@ def _strip_inline_header(line: str) -> str:
         return line[match.end() :]
     return line
 
-FIELD_HINTS: dict[str, str] = {
-    "name": "The full name of the CV owner. Usually at the very top of the document.",
-    "promotion_year": (
-        "The calendar year this person was promoted to Associate Professor or Reader. "
-        "Look in the employment / positions / appointments section for dates next to "
-        "'Associate Professor' or 'Reader'."
-    ),
-    "promotion_university": (
-        "The university or institution where the promotion to Associate Professor "
-        "or Reader occurred. Usually listed alongside the title in the employment section."
-    ),
-    "years_post_phd": (
-        "Integer years between PhD completion and promotion to Associate Professor / Reader. "
-        "PhD year is typically in the Education section; promotion year in Employment. "
-        "Calculate: promotion_year minus phd_year."
-    ),
-}
+
+def _resolve_rank(label: str, rank: str | None) -> str:
+    if rank is None:
+        return infer_rank_from_label(label)
+    provided_rank = rank.strip().lower()
+    if provided_rank not in {"associate", "full"}:
+        raise ValueError(f"Invalid rank '{rank}': expected 'associate' or 'full'.")
+    return provided_rank
 
 
-def detect_sections(text: str) -> dict[str, str]:
-    lines = text.split("\n")
-    hits: list[tuple[str, int]] = []
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or len(stripped) > 100:
+def _metadata_output_fields(rank: str) -> list[str]:
+    fields = ["name", "research_fields", "promotion_year", "promotion_university", "years_post_phd"]
+    if rank == "full":
+        fields.extend(["full_promotion_year", "full_promotion_university", "years_post_phd_full"])
+    return fields
+
+
+def _build_merged_metadata(meta: dict[str, Any], *, rank: str) -> dict[str, Any]:
+    merged = {
+        "rank": rank,
+        "name": meta.get("name"),
+        "research_fields": normalize_research_fields(meta.get("research_fields", "")),
+        "promotion_year": meta.get("promotion_year"),
+        "promotion_university": meta.get("promotion_university"),
+        "years_post_phd": meta.get("years_post_phd"),
+    }
+    if rank == "full":
+        merged.update(
+            {
+                "full_promotion_year": meta.get("full_promotion_year"),
+                "full_promotion_university": meta.get("full_promotion_university"),
+                "years_post_phd_full": meta.get("years_post_phd_full"),
+            }
+        )
+    else:
+        merged.update(
+            {
+                "full_promotion_year": None,
+                "full_promotion_university": None,
+                "years_post_phd_full": None,
+            }
+        )
+    return merged
+
+
+def _apply_verified_metadata(
+    merged: dict[str, Any],
+    verified: dict[str, Any],
+    *,
+    rank: str,
+    local_research_fields: str,
+) -> None:
+    for key in _metadata_output_fields(rank):
+        if key not in verified:
             continue
-        for sec_name, pattern in SECTION_PATTERNS.items():
-            if pattern.match(stripped):
-                hits.append((sec_name, idx))
-                break
+        if key == "research_fields" and local_research_fields:
+            continue
+        if key == "research_fields":
+            merged[key] = normalize_research_fields(verified.get(key, ""))
+            continue
+        merged[key] = verified.get(key)
 
-    hits.sort(key=lambda item: item[1])
-    result: dict[str, str] = {"full_text": text}
-    for idx, (name, start) in enumerate(hits):
-        end = hits[idx + 1][1] if idx + 1 < len(hits) else len(lines)
-        chunk = "\n".join(lines[start:end])
-        if name in result:
-            # Some CVs contain multiple sections with the same header (e.g., "Selected Publications"
-            # and a later "Publications" block). Preserve all matched chunks instead of overwriting.
-            result[name] += "\n\n" + chunk
-        else:
-            result[name] = chunk
-    return result
+
+def infer_rank_from_label(label: str | None) -> str:
+    if not label:
+        raise ValueError("Missing file label; expected path containing '/associate/' or '/full/'.")
+    tokens = [token.strip().lower() for token in re.split(r"[\\/]+", label) if token.strip()]
+    has_full = "full" in tokens
+    has_associate = "associate" in tokens
+    if has_full and has_associate:
+        raise ValueError(
+            f"Ambiguous rank path '{label}': contains both 'associate' and 'full'."
+        )
+    if has_full:
+        return "full"
+    if has_associate:
+        return "associate"
+    raise ValueError(
+        f"Invalid rank path '{label}': expected directory token 'associate' or 'full'."
+    )
 
 
 def split_publications(pub_text: str) -> list[str]:
@@ -268,7 +272,7 @@ def _metadata_input(sections: dict[str, str]) -> str:
     chunks: list[str] = []
     top = "\n".join(sections["full_text"].split("\n")[:30])
     chunks.append("=== TOP OF CV ===\n" + top)
-    for key in ("education", "employment"):
+    for key in ("research_interests", "education", "employment"):
         if key in sections:
             chunks.append(f"=== {key.upper()} ===\n" + sections[key])
     if len(chunks) == 1:
@@ -306,7 +310,7 @@ def _build_verification_context(sections: dict[str, str]) -> str | None:
     base_blocks: list[str] = []
     if top:
         base_blocks.append(_format_verification_block("TOP OF CV", top))
-    for key in ("education", "employment"):
+    for key in ("research_interests", "education", "employment"):
         value = sections.get(key, "").strip()
         if value:
             base_blocks.append(_format_verification_block(key.upper(), value))
@@ -342,8 +346,14 @@ def _build_verification_context(sections: dict[str, str]) -> str | None:
 def _normalise_years(val: Any) -> list[int]:
     if val is None or val is False or val == 0:
         return []
-    if isinstance(val, int):
+    if isinstance(val, bool):
         return []
+    if isinstance(val, (int, str)):
+        try:
+            year = int(val)
+        except (TypeError, ValueError):
+            return []
+        return [year] if 1900 <= year <= 2100 else []
     if isinstance(val, list):
         years: list[int] = []
         for item in val:
@@ -357,11 +367,13 @@ def _normalise_years(val: Any) -> list[int]:
     return []
 
 
-def extract_metadata(client, sections: dict[str, str], label: str) -> dict[str, Any]:
+def extract_metadata(
+    client, sections: dict[str, str], label: str, *, rank: str
+) -> dict[str, Any]:
     data = _call_json(
         client,
         [
-            {"role": "user", "content": build_metadata_prompt()},
+            {"role": "user", "content": build_metadata_prompt(rank)},
             {"role": "user", "content": _metadata_input(sections)},
         ],
         label=f"{label}/meta",
@@ -387,18 +399,18 @@ def extract_publications(client, sections: dict[str, str], label: str) -> dict[s
 
 
 def targeted_reprocess(
-    client, fields: list[str], sections: dict[str, str], label: str
+    client, fields: list[str], sections: dict[str, str], label: str, *, rank: str
 ) -> dict[str, Any] | None:
-    requested = [field for field in fields if field in CONF_FIELDS]
+    conf_fields = set(metadata_fields_for_rank(rank))
+    requested = [field for field in fields if field in conf_fields]
     if not requested:
         return None
-    hint_by_field = {field: FIELD_HINTS.get(field, "") for field in requested}
     return _call_json(
         client,
         [
             {
                 "role": "user",
-                "content": build_targeted_retry_prompt(requested, hint_by_field),
+                "content": build_targeted_retry_prompt(requested, rank=rank),
             },
             {"role": "user", "content": sections["full_text"]},
         ],
@@ -406,25 +418,32 @@ def targeted_reprocess(
     )
 
 
-def _verification_payload(extracted: dict[str, Any]) -> dict[str, Any]:
+def _verification_payload(extracted: dict[str, Any], *, rank: str) -> dict[str, Any]:
     journals_for_verify: dict[str, list[int] | bool] = {}
     raw_years = extracted.get("journal_years", {})
     for journal in JOURNALS:
         years = _normalise_years(raw_years.get(journal, [])) if isinstance(raw_years, dict) else []
         journals_for_verify[journal] = years if years else False
-    return {
+    payload = {
         "name": extracted.get("name"),
+        "research_fields": normalize_research_fields(extracted.get("research_fields", "")),
         "promotion_year": extracted.get("promotion_year"),
         "promotion_university": extracted.get("promotion_university"),
         "years_post_phd": extracted.get("years_post_phd"),
         "journals": journals_for_verify,
     }
+    if rank == "full":
+        payload["full_promotion_year"] = extracted.get("full_promotion_year")
+        payload["full_promotion_university"] = extracted.get("full_promotion_university")
+        payload["years_post_phd_full"] = extracted.get("years_post_phd_full")
+    return payload
 
 
 def _should_run_verification(
     merged: dict[str, Any],
     sections: dict[str, str],
     *,
+    confidence_fields: list[str],
     confidence_threshold: float,
 ) -> bool:
     """
@@ -434,7 +453,7 @@ def _should_run_verification(
     """
     meta_conf = merged.get("metadata_confidence", {})
     if isinstance(meta_conf, dict):
-        for field in CONF_FIELDS:
+        for field in confidence_fields:
             if _parse_confidence(meta_conf.get(field, 0.0)) < confidence_threshold:
                 return True
 
@@ -457,8 +476,10 @@ def verification_pass(
     extracted: dict[str, Any],
     sections: dict[str, str],
     label: str,
+    *,
+    rank: str,
 ) -> dict[str, Any] | None:
-    verify_data = _verification_payload(extracted)
+    verify_data = _verification_payload(extracted, rank=rank)
     verify_context = _build_verification_context(sections)
     if not verify_context:
         return None
@@ -467,7 +488,7 @@ def verification_pass(
         [
             {
                 "role": "user",
-                "content": build_verification_prompt(verify_data),
+                "content": build_verification_prompt(verify_data, rank=rank),
             },
             {"role": "user", "content": "ORIGINAL CV:\n\n" + verify_context},
         ],
@@ -481,17 +502,27 @@ def extract_cv_staged(
     cv_text: str,
     label: str,
     *,
+    rank: str | None = None,
     confidence_threshold: float = CONFIDENCE_THRESHOLD,
     do_verification: bool = True,
 ) -> dict[str, Any]:
+    resolved_rank = _resolve_rank(label, rank)
+    conf_fields = metadata_fields_for_rank(resolved_rank)
     sections = detect_sections(cv_text)
 
-    meta = extract_metadata(client, sections, label)
+    local_research_fields = normalize_research_fields(extract_local_research_fields(cv_text, sections))
+
+    meta = extract_metadata(client, sections, label, rank=resolved_rank)
+    if local_research_fields:
+        meta["research_fields"] = local_research_fields
+        meta["research_fields_confidence"] = 1.0
+    else:
+        meta["research_fields"] = normalize_research_fields(meta.get("research_fields", ""))
     pubs = extract_publications(client, sections, label)
 
     low_conf_fields: list[str] = []
     old_conf_by_field: dict[str, float] = {}
-    for field in CONF_FIELDS:
+    for field in conf_fields:
         conf_key = f"{field}_confidence"
         conf = _parse_confidence(meta.get(conf_key, 0.0))
         old_conf_by_field[field] = conf
@@ -499,7 +530,7 @@ def extract_cv_staged(
             low_conf_fields.append(field)
 
     if low_conf_fields:
-        retry = targeted_reprocess(client, low_conf_fields, sections, label)
+        retry = targeted_reprocess(client, low_conf_fields, sections, label, rank=resolved_rank)
         if isinstance(retry, dict):
             for field in low_conf_fields:
                 conf_key = f"{field}_confidence"
@@ -516,29 +547,32 @@ def extract_cv_staged(
     for journal in JOURNALS:
         journal_years[journal] = _normalise_years(raw_journals.get(journal, False))
 
-    merged: dict[str, Any] = {
-        "name": meta.get("name"),
-        "promotion_year": meta.get("promotion_year"),
-        "promotion_university": meta.get("promotion_university"),
-        "years_post_phd": meta.get("years_post_phd"),
-        "journal_years": journal_years,
-        "metadata_confidence": {
-            f: meta.get(f"{f}_confidence") for f in CONF_FIELDS if f"{f}_confidence" in meta
-        },
-        "sections_found": [key for key in sections.keys() if key != "full_text"],
+    merged: dict[str, Any] = _build_merged_metadata(meta, rank=resolved_rank)
+    merged["journal_years"] = journal_years
+    merged["metadata_confidence"] = {
+        f: meta.get(f"{f}_confidence") for f in conf_fields if f"{f}_confidence" in meta
     }
+    merged["sections_found"] = [key for key in sections.keys() if key != "full_text"]
 
     if do_verification:
         should_verify = _should_run_verification(
             merged,
             sections,
+            confidence_fields=conf_fields,
             confidence_threshold=confidence_threshold,
         )
-        verified = verification_pass(client, merged, sections, label) if should_verify else None
+        verified = (
+            verification_pass(client, merged, sections, label, rank=resolved_rank)
+            if should_verify
+            else None
+        )
         if isinstance(verified, dict):
-            for key in ("name", "promotion_year", "promotion_university", "years_post_phd"):
-                if key in verified:
-                    merged[key] = verified.get(key)
+            _apply_verified_metadata(
+                merged,
+                verified,
+                rank=resolved_rank,
+                local_research_fields=local_research_fields,
+            )
             verified_journals = verified.get("journals", {})
             if "publications" in sections and isinstance(verified_journals, dict):
                 for journal in JOURNALS:
@@ -546,5 +580,6 @@ def extract_cv_staged(
                         verified_journals.get(journal, False)
                     )
 
+    merged["research_fields"] = normalize_research_fields(merged.get("research_fields", ""))
     merged["journals"] = {journal: len(merged["journal_years"][journal]) for journal in JOURNALS}
     return merged
