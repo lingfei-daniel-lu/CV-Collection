@@ -63,18 +63,19 @@ High-level flow:
 3. Extract local `research_fields` from:
    - explicit `research_interests` sections
    - cautious explicit-label fallback when no usable section is found
-4. Run metadata extraction with confidence scores
-5. Use local `research_fields` when available; do not let verification overwrite them
-6. Split publications heuristically and extract target-journal publication years
-7. Retry low-confidence metadata fields in one targeted LLM call
-8. Run verification only when extraction appears risky
-9. Write per-model CSV output
+4. Run metadata extraction for the promotion / institution fields
+5. For full professors, extract the additional full-promotion fields from the same promotion-focused context
+6. Keep `research_fields` on the local section/fallback path; it does not participate in metadata verification
+7. Split publications heuristically and extract target-journal publication years
+8. Retry low-confidence metadata fields in one targeted LLM call
+9. Run verification only when extraction appears risky
+10. Write per-model CSV output
 
 Important current behavior:
 
 - repeated section headers are preserved and concatenated
 - verification is conditional, not mandatory
-- verification uses a section-aware context and may be skipped if no safe context fits
+- promotion metadata and verification stay close to the older `education + employment` logic
 - journal years are normalized from lists and scalar year responses
 - final CSV keeps journal counts, while internal extraction keeps matched year lists
 
@@ -107,8 +108,6 @@ Prompt content is split into:
   - publication prompt
   - targeted retry prompt
   - verification prompt
-- `cv_collection/legacy_prompts.py`
-  - legacy prompt builder kept only as reference
 
 ## Cache
 
@@ -243,7 +242,6 @@ CV-Collection/
 │   ├── llm_client.py
 │   ├── output_utils.py
 │   ├── prompt_rules.py
-│   ├── legacy_prompts.py
 │   ├── staged_prompts.py
 │   ├── research_field_taxonomy.py
 │   ├── section_taxonomy.py

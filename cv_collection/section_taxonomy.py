@@ -34,18 +34,14 @@ _INLINE_RESEARCH_HEADER_BODY = (
 
 SECTION_PATTERNS: dict[str, re.Pattern[str]] = {
     "research_interests": re.compile(
-        rf"(?i)^[#*\-_\s]*(?:{_SECTION_RESEARCH_HEADER_BODY})\s*:?\s*$"
+        rf"(?i)^[#*\-_\s]*(?:{_SECTION_RESEARCH_HEADER_BODY})\s*[:.]?\s*$"
     ),
     "education": re.compile(
         r"(?i)^[#*\-_\s]*(?:education|academic\s+qualifications?|degrees?)\s*:?\s*$"
     ),
     "employment": re.compile(
-        r"(?i)^[#*\-_\s]*(?:"
-        r"(?:academic|professional|economic)?\s*employment(?:\s+history)?|"
-        r"employment(?:\s+history)?|"
-        r"academic\s+(?:positions?|appointments?)|"
-        r"positions?\s+held|"
-        r"work\s+experience|"
+        r"(?i)^[#*\-_\s]*(?:employment|academic\s+(?:positions?|appointments?)|"
+        r"professional\s+experience|positions?\s+held|work\s+experience|"
         r"career\s+history|"
         r"appointments?"
         r")\s*:?\s*$"
@@ -62,14 +58,8 @@ SECTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"research\s+in\s+progress)\s*:?\s*$"
     ),
     "awards": re.compile(
-        r"(?i)^[#*\-_\s]*(?:"
-        r"(?:general|research)?\s*awards?(?:\s+for\s+\w+)?|"
-        r"awards?\s+for\s+\w+|"
-        r"awards?(?:\s+(?:and|&)\s+(?:honors?|honours?))?|"
-        r"honors?\s+and\s+offices\s+held|"
-        r"honours?\s+and\s+offices\s+held|"
-        r"honors?|honours?|prizes?|fellowships?"
-        r")\s*:?\s*$"
+        r"(?i)^[#*\-_\s]*(?:awards?(?:\s+(?:and|&)\s+(?:honors?|honours?))?|"
+        r"honors?|honours?|prizes?|fellowships?)\s*:?\s*$"
     ),
     "teaching": re.compile(
         r"(?i)^[#*\-_\s]*(?:teaching(?:\s+experience)?|courses?\s+taught)\s*:?\s*$"
@@ -125,18 +115,6 @@ SECTION_HEADER_HINT = re.compile(
     r"research|service|teaching|working"
     r")\b"
 )
-
-DETECT_SECTION_TITLE_PATTERNS: dict[str, re.Pattern[str]] = {
-    "research_interests": re.compile(
-        rf"(?i)^(?:{_SECTION_RESEARCH_HEADER_BODY})\s*[:.]?\s*$"
-    ),
-    "education": re.compile(r"(?i)^education\s*[:.]?\s*$"),
-    "employment": re.compile(
-        r"(?i)^(?:professional\s+experience|work\s+experience|employment|current\s+position)"
-        r"\s*[:.]?\s*$"
-    ),
-}
-
 
 def extract_caps_prefix(line: str) -> str:
     words = line.strip().split()
@@ -252,14 +230,19 @@ def extract_research_fields_from_section(section_text: str) -> str:
     return result
 
 
-def extract_explicit_research_fields_fallback(text: str) -> str:
+def extract_local_research_fields(text: str, sections: dict[str, str] | None = None) -> str:
+    local_sections = sections or detect_sections(text)
+    section_text = local_sections.get("research_interests", "")
+    extracted = extract_research_fields_from_section(section_text)
+    if extracted:
+        return extracted
+
     lines = text.split("\n")
     for idx, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped or len(stripped) > 240:
+        if not stripped or len(stripped) > 240 or any(quote in stripped for quote in {'"', "“", "”"}):
             continue
-        if any(quote in stripped for quote in {'"', "“", "”"}):
-            continue
+
         match = EXPLICIT_RESEARCH_FIELD_INLINE_PATTERN.search(stripped)
         if match:
             content = match.group("content").strip(" ,;:.")
@@ -275,9 +258,12 @@ def extract_explicit_research_fields_fallback(text: str) -> str:
                 if content_lines:
                     break
                 continue
-            if len(candidate) > 140 or looks_like_section_header(candidate) or _looks_like_generic_title(candidate):
-                break
-            if any(quote in candidate for quote in {'"', "“", "”"}):
+            if (
+                len(candidate) > 140
+                or looks_like_section_header(candidate)
+                or _looks_like_generic_title(candidate)
+                or any(quote in candidate for quote in {'"', "“", "”"})
+            ):
                 break
             content_lines.append(candidate)
             if len(content_lines) >= 2:
@@ -287,19 +273,11 @@ def extract_explicit_research_fields_fallback(text: str) -> str:
     return ""
 
 
-def extract_local_research_fields(text: str, sections: dict[str, str] | None = None) -> str:
-    local_sections = sections or detect_sections(text)
-    section_text = local_sections.get("research_interests", "")
-    extracted = extract_research_fields_from_section(section_text)
-    if extracted:
-        return extracted
-    return extract_explicit_research_fields_fallback(text)
-
-
 def detect_sections(text: str) -> dict[str, str]:
     lines = text.split("\n")
     hits: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
+    research_pattern = SECTION_PATTERNS["research_interests"]
 
     def register(name: str, idx: int) -> None:
         key = (name, idx)
@@ -309,7 +287,7 @@ def detect_sections(text: str) -> dict[str, str]:
 
     for idx, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped or len(stripped) > 120:
+        if not stripped or len(stripped) > 100:
             continue
         for sec_name, pattern in SECTION_PATTERNS.items():
             if pattern.match(stripped):
@@ -338,12 +316,8 @@ def detect_sections(text: str) -> dict[str, str]:
             if not second:
                 continue
             second_prefix = extract_caps_prefix(second)
-            if second_prefix:
-                combined = f"{first_prefix} {second_prefix}".strip()
-                for sec_name, pattern in SECTION_PATTERNS.items():
-                    if pattern.match(combined):
-                        register(sec_name, idx)
-                        break
+            if second_prefix and research_pattern.match(f"{first_prefix} {second_prefix}".strip()):
+                register("research_interests", idx)
             break
 
     for idx, line in enumerate(lines):
@@ -353,10 +327,8 @@ def detect_sections(text: str) -> dict[str, str]:
         prefix = extract_caps_prefix(stripped)
         if not prefix or len(prefix) < 4:
             continue
-        for sec_name, pattern in SECTION_PATTERNS.items():
-            if pattern.match(prefix):
-                register(sec_name, idx)
-                break
+        if research_pattern.match(prefix):
+            register("research_interests", idx)
 
     for idx, line in enumerate(lines):
         if "|" not in line:
@@ -364,19 +336,8 @@ def detect_sections(text: str) -> dict[str, str]:
         first_cell = line.split("|", 1)[0].strip()
         if not first_cell or len(first_cell) >= 50:
             continue
-        for sec_name, pattern in SECTION_PATTERNS.items():
-            if pattern.match(first_cell):
-                register(sec_name, idx)
-                break
-
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or len(stripped) > 80:
-            continue
-        for sec_name, pattern in DETECT_SECTION_TITLE_PATTERNS.items():
-            if pattern.match(stripped):
-                register(sec_name, idx)
-                break
+        if research_pattern.match(first_cell):
+            register("research_interests", idx)
 
     hits.sort(key=lambda item: item[1])
     result: dict[str, str] = {"full_text": text}

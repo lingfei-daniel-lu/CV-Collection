@@ -1,6 +1,4 @@
-"""
-LLM client configuration and call helper, supporting multiple providers.
-"""
+"""LLM client configuration and chat helper for the current Poe-based pipeline."""
 
 from __future__ import annotations
 
@@ -22,9 +20,7 @@ def _load_local_api_keys() -> dict[str, str]:
     if not isinstance(local_api_keys, dict):
         raise TypeError("local_api_keys.API_KEYS must be a dict[str, str].")
     return {str(k): str(v).strip() for k, v in local_api_keys.items() if str(v).strip()}
-
-
-def _resolve_api_key(name: str) -> str:
+def _require_api_key(name: str) -> str:
     value = LOCAL_API_KEYS.get(name) or os.getenv(name, "").strip()
     if value:
         return value
@@ -35,15 +31,7 @@ def _resolve_api_key(name: str) -> str:
 
 
 LOCAL_API_KEYS = _load_local_api_keys()
-# DEEPSEEK_API_KEY = _resolve_api_key("DEEPSEEK_API_KEY")
-# DeepSeek is currently routed via Poe, so keep the old key optional.
-DEEPSEEK_API_KEY = (
-    LOCAL_API_KEYS.get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "").strip()
-)
-# KIMI_API_KEY = _resolve_api_key("KIMI_API_KEY")
-# Kimi is currently routed via Poe, so keep the old key optional.
-KIMI_API_KEY = (LOCAL_API_KEYS.get("KIMI_API_KEY") or os.getenv("KIMI_API_KEY", "").strip())
-POE_API_KEY = _resolve_api_key("POE_API_KEY")
+POE_API_KEY = _require_api_key("POE_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -69,7 +57,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         key="deepseek",
         # Original direct DeepSeek call, kept for reference:
         # model="deepseek-reasoner",
-        # api_key=DEEPSEEK_API_KEY,
+        # api_key=_require_api_key("DEEPSEEK_API_KEY"),
         # base_url="https://api.deepseek.com",
         model="deepseek-v3.2",
         api_key=POE_API_KEY,
@@ -79,7 +67,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         key="kimi",
         # Original direct Kimi(Moonshot) call, kept for reference:
         # model="kimi-k2-thinking",
-        # api_key=KIMI_API_KEY,
+        # api_key=_require_api_key("KIMI_API_KEY"),
         # base_url="https://api.moonshot.ai/v1",
         model="kimi-k2.5",
         api_key=POE_API_KEY,
@@ -138,16 +126,6 @@ class ModelClient:
                 time.sleep(wait)
 
         return None
-
-    def chat_completion(self, cv_text: str, prompt: str) -> Optional[str]:
-        """Backward-compatible wrapper for the original prompt + text call shape."""
-        return self.chat_messages(
-            [
-                {"role": "user", "content": prompt},
-                {"role": "user", "content": cv_text},
-            ]
-        )
-
 
 def get_model_client(key: str) -> ModelClient:
     try:

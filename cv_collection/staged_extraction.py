@@ -85,7 +85,7 @@ def _resolve_rank(label: str, rank: str | None) -> str:
 
 
 def _metadata_output_fields(rank: str) -> list[str]:
-    fields = ["name", "research_fields", "promotion_year", "promotion_university", "years_post_phd"]
+    fields = ["name", "promotion_year", "promotion_university", "years_post_phd"]
     if rank == "full":
         fields.extend(["full_promotion_year", "full_promotion_university", "years_post_phd_full"])
     return fields
@@ -95,7 +95,7 @@ def _build_merged_metadata(meta: dict[str, Any], *, rank: str) -> dict[str, Any]
     merged = {
         "rank": rank,
         "name": meta.get("name"),
-        "research_fields": normalize_research_fields(meta.get("research_fields", "")),
+        "research_fields": "",
         "promotion_year": meta.get("promotion_year"),
         "promotion_university": meta.get("promotion_university"),
         "years_post_phd": meta.get("years_post_phd"),
@@ -124,15 +124,9 @@ def _apply_verified_metadata(
     verified: dict[str, Any],
     *,
     rank: str,
-    local_research_fields: str,
 ) -> None:
     for key in _metadata_output_fields(rank):
         if key not in verified:
-            continue
-        if key == "research_fields" and local_research_fields:
-            continue
-        if key == "research_fields":
-            merged[key] = normalize_research_fields(verified.get(key, ""))
             continue
         merged[key] = verified.get(key)
 
@@ -272,7 +266,7 @@ def _metadata_input(sections: dict[str, str]) -> str:
     chunks: list[str] = []
     top = "\n".join(sections["full_text"].split("\n")[:30])
     chunks.append("=== TOP OF CV ===\n" + top)
-    for key in ("research_interests", "education", "employment"):
+    for key in ("education", "employment"):
         if key in sections:
             chunks.append(f"=== {key.upper()} ===\n" + sections[key])
     if len(chunks) == 1:
@@ -310,7 +304,7 @@ def _build_verification_context(sections: dict[str, str]) -> str | None:
     base_blocks: list[str] = []
     if top:
         base_blocks.append(_format_verification_block("TOP OF CV", top))
-    for key in ("research_interests", "education", "employment"):
+    for key in ("education", "employment"):
         value = sections.get(key, "").strip()
         if value:
             base_blocks.append(_format_verification_block(key.upper(), value))
@@ -426,7 +420,6 @@ def _verification_payload(extracted: dict[str, Any], *, rank: str) -> dict[str, 
         journals_for_verify[journal] = years if years else False
     payload = {
         "name": extracted.get("name"),
-        "research_fields": normalize_research_fields(extracted.get("research_fields", "")),
         "promotion_year": extracted.get("promotion_year"),
         "promotion_university": extracted.get("promotion_university"),
         "years_post_phd": extracted.get("years_post_phd"),
@@ -461,9 +454,9 @@ def _should_run_verification(
     if "employment" not in sections or "publications" not in sections:
         return True
 
-    # Broaden the gate without full verification: verify whenever we extracted any target-journal hits.
+    has_working_papers = bool(sections.get("working_papers", "").strip())
     journal_years = merged.get("journal_years", {})
-    if isinstance(journal_years, dict) and any(
+    if has_working_papers and isinstance(journal_years, dict) and any(
         isinstance(v, list) and len(v) > 0 for v in journal_years.values()
     ):
         return True
@@ -513,11 +506,6 @@ def extract_cv_staged(
     local_research_fields = normalize_research_fields(extract_local_research_fields(cv_text, sections))
 
     meta = extract_metadata(client, sections, label, rank=resolved_rank)
-    if local_research_fields:
-        meta["research_fields"] = local_research_fields
-        meta["research_fields_confidence"] = 1.0
-    else:
-        meta["research_fields"] = normalize_research_fields(meta.get("research_fields", ""))
     pubs = extract_publications(client, sections, label)
 
     low_conf_fields: list[str] = []
@@ -548,6 +536,7 @@ def extract_cv_staged(
         journal_years[journal] = _normalise_years(raw_journals.get(journal, False))
 
     merged: dict[str, Any] = _build_merged_metadata(meta, rank=resolved_rank)
+    merged["research_fields"] = local_research_fields
     merged["journal_years"] = journal_years
     merged["metadata_confidence"] = {
         f: meta.get(f"{f}_confidence") for f in conf_fields if f"{f}_confidence" in meta
@@ -571,7 +560,6 @@ def extract_cv_staged(
                 merged,
                 verified,
                 rank=resolved_rank,
-                local_research_fields=local_research_fields,
             )
             verified_journals = verified.get("journals", {})
             if "publications" in sections and isinstance(verified_journals, dict):
@@ -580,6 +568,5 @@ def extract_cv_staged(
                         verified_journals.get(journal, False)
                     )
 
-    merged["research_fields"] = normalize_research_fields(merged.get("research_fields", ""))
     merged["journals"] = {journal: len(merged["journal_years"][journal]) for journal in JOURNALS}
     return merged

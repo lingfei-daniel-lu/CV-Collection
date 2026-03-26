@@ -2,7 +2,7 @@
 Shared prompt rule blocks (single source of truth) for CV extraction.
 
 These blocks define extraction semantics only. Flow-specific prompt schemas live in
-`staged_prompts.py` and `legacy_prompts.py`.
+`staged_prompts.py`.
 """
 
 from __future__ import annotations

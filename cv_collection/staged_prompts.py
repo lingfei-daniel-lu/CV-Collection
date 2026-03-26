@@ -24,7 +24,6 @@ from cv_collection.prompt_rules import (
 
 BASE_METADATA_FIELDS = [
     "name",
-    "research_fields",
     "promotion_year",
     "promotion_university",
     "years_post_phd",
@@ -36,7 +35,6 @@ FULL_ONLY_METADATA_FIELDS = [
 ]
 BASE_FIELD_DEFINITIONS = [
     "- name: the CV owner's full name (usually near the top of the document)",
-    "- research_fields: PRIMARY research fields/interests explicitly listed on the CV",
     "- promotion_year: the tenure-track promotion year to Associate Professor or Reader",
     "- promotion_university: the institution where that tenure-track promotion occurred",
     "- years_post_phd: integer years between PhD completion and promotion_year",
@@ -48,7 +46,6 @@ FULL_FIELD_DEFINITIONS = [
 ]
 VERIFICATION_CHECK_LINES = [
     '- "name" is correct',
-    '- "research_fields" includes only explicit primary research fields (empty string if missing)',
     '- "promotion_year" is the tenure-track Associate/Reader promotion year',
     '- "promotion_university" is correct for promotion_year',
     '- "years_post_phd" = promotion_year minus PhD year',
@@ -259,9 +256,7 @@ def build_verification_prompt(
 TASK
 -----
 Verify and correct the extracted data below against the original CV.
-Keep correct fields unchanged. Fix wrong ones.
-For missing or unknowable `research_fields`, return an empty string.
-For other missing or unknowable metadata fields, return null.
+Keep correct fields unchanged. Fix wrong ones. Set unknowable fields to null.
 """,
         "EXTRACTED DATA:\n" + extracted_json,
         *_metadata_rule_blocks(metadata_fields_for_rank(resolved_rank), resolved_rank),
